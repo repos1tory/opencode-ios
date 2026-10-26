@@ -141,6 +141,17 @@ update preserves the existing network configuration. The V8 heap defaults to
 
 ## Rebuild and install
 
+### Install from repos1tory
+
+Add `https://repos1tory.github.io/` to Sileo or Zebra, then install
+**OpenCode Server (iOS)**. The repository publishes the same package artifact
+from this source tree and records its Debian metadata in `Packages`.
+
+The package targets jailbroken iOS devices running firmware 15 or newer and
+the `iphoneos-arm64` architecture. It starts with `AUTO_START=1` by default;
+set `AUTO_START=0` in the existing settings file before upgrading if the
+services must remain stopped.
+
 ```sh
 cd /var/mobile/Projects/OpenCodeServer
 ./build-package.sh
@@ -152,6 +163,17 @@ local install, run the package manager as root:
 ```sh
 sudo /var/jb/usr/bin/dpkg -i build/opencode-server-2.0.28-0ios40_iphoneos-arm64.deb
 ```
+
+Before installing a manually downloaded package, verify its metadata:
+
+```sh
+/var/jb/usr/bin/dpkg-deb -I opencode-server-2.0.28-0ios40_iphoneos-arm64.deb
+```
+
+The package post-install script verifies `curl`, preserves legacy session data
+when present, starts the private core and network relay only after health
+checks pass, and loads the watchdog. If startup fails, `dpkg` reports the
+failure instead of silently leaving a partially configured service.
 
 The build script runs as `mobile` and creates the `.deb` with
 `dpkg-deb --root-owner-group`. It only falls back to `sudo` if a `build/`
