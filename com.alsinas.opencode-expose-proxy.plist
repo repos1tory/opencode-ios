@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.alsinas.opencode-expose-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/var/jb/usr/lib/opencode-ios/opencode-expose-proxy</string>
+    </array>
+    <key>UserName</key>
+    <string>mobile</string>
+    <key>GroupName</key>
+    <string>mobile</string>
+    <key>WorkingDirectory</key>
+    <string>/var/mobile</string>
+    <key>KeepAlive</key>
+    <dict>
+      <key>PathState</key>
+      <dict>
+        <key>/var/mobile/.config/opencode-ios/relay.enabled</key>
+        <true/>
+      </dict>
+    </dict>
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>StandardOutPath</key>
+    <string>/var/mobile/Library/Logs/OpenCode/expose.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/mobile/Library/Logs/OpenCode/expose.err.log</string>
+  </dict>
+</plist>

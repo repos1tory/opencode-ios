@@ -1,0 +1,290 @@
+#!/var/jb/bin/sh
+# OpenCode Server control helper.
+#
+# Everything here runs as the mobile user. Service lifecycle is controlled by
+# launchd KeepAlive PathState flags instead of privileged launchctl bootstrap
+# calls, so the Settings pane no longer needs passwordless sudo.
+
+set -e
+
+domain="user/501"
+label="$domain/com.alsinas.opencode-server"
+plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-server.plist"
+proxy_label="$domain/com.alsinas.opencode-expose-proxy"
+proxy_plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-expose-proxy.plist"
+launchctl="/var/jb/usr/bin/launchctl"
+config="/var/mobile/.config/opencode-ios/settings.conf"
+config_dir="/var/mobile/.config/opencode-ios"
+core_flag="$config_dir/server.enabled"
+relay_flag="$config_dir/relay.enabled"
+manual_lock="$config_dir/manual.lock"
+internal_port=4097
+import_pending="/var/jb/usr/lib/opencode-ios/import-pending-sessions.sh"
+lock_held=0
+
+acquire_lock() {
+  /var/jb/usr/bin/date +%s >"$manual_lock"
+  /var/jb/usr/bin/chown mobile:mobile "$manual_lock" 2>/dev/null || true
+  /var/jb/usr/bin/chmod 600 "$manual_lock" 2>/dev/null || true
+  lock_held=1
+}
+
+release_lock() {
+  if [ "$lock_held" = "1" ]; then
+    /var/jb/usr/bin/rm -f "$manual_lock"
+  fi
+  lock_held=0
+  return 0
+}
+
+trap 'release_lock' 0
+trap 'release_lock; exit 1' 1 2 15
+
+configured_port() {
+  port=4096
+  if [ -r "$config" ]; then
+    while IFS='=' read -r key value; do
+      [ "$key" = "PORT" ] && port="$value"
+    done < "$config"
+  fi
+  case "$port" in ''|*[!0-9]*) port=4096 ;; esac
+  if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
+  echo "$port"
+}
+
+refresh_webclip() {
+  /var/jb/usr/lib/opencode-ios/install-webclip.sh >/dev/null 2>&1 || true
+}
+
+job_loaded() {
+  "$launchctl" print "$1" >/dev/null 2>&1
+}
+
+job_pid() {
+  "$launchctl" print "$1" 2>/dev/null |
+    /var/jb/usr/bin/sed -n 's/^[[:space:]]*pid = //p' |
+    /var/jb/usr/bin/tail -n 1
+}
+
+wait_for_job() {
+  service_label="$1"
+  attempts="$2"
+  attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if job_loaded "$service_label"; then return 0; fi
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+healthy() {
+  /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 "$1" -o /dev/null 2>/dev/null
+}
+
+wait_for_url() {
+  url="$1"
+  attempts="$2"
+  message="$3"
+  attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    if healthy "$url"; then
+      return 0
+    fi
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  [ -n "$message" ] && echo "$message" >&2 || true
+  return 1
+}
+
+wait_for_core() {
+  wait_for_url "http://127.0.0.1:$internal_port/api/info" 90 "OpenCode core did not become healthy on 127.0.0.1:$internal_port."
+}
+
+wait_for_relay() {
+  port="$(configured_port)"
+  wait_for_url "http://127.0.0.1:$port/api/info" 60 "The local relay did not return a healthy OpenCode response on port $port."
+}
+
+wait_for_access_interfaces() {
+  if ! /var/jb/usr/lib/opencode-ios/opencode-expose-proxy --check-access; then
+    echo "A selected network-sharing interface is unavailable or cannot accept peers under the current policy." >&2
+    return 1
+  fi
+}
+
+set_flag() {
+  : > "$1"
+  /var/jb/usr/bin/chown mobile:mobile "$1" 2>/dev/null || true
+  /var/jb/usr/bin/chmod 600 "$1" 2>/dev/null || true
+}
+
+clear_flag() {
+  /var/jb/usr/bin/rm -f "$1"
+}
+
+kill_pid() {
+  pid="$1"
+  [ -n "$pid" ] || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  return 0
+}
+
+# Stop a service and keep it stopped. The flag is cleared first so launchd's
+# KeepAlive PathState stops respawning after the process is signalled.
+stop_service() {
+  service_label="$1"
+  service_flag="$2"
+  clear_flag "$service_flag"
+  attempt=0
+  while [ "$attempt" -lt 20 ]; do
+    pid="$(job_pid "$service_label")"
+    [ -z "$pid" ] && return 0
+    kill_pid "$pid"
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  echo "Timed out waiting for $service_label to stop." >&2
+  return 1
+}
+
+set_config_value() {
+  key="$1"
+  value="$2"
+  temporary="$config.$$"
+  if [ -r "$config" ]; then
+    /var/jb/usr/bin/grep -v "^${key}=" "$config" > "$temporary" 2>/dev/null || :
+  else
+    : > "$temporary"
+  fi
+  printf '%s=%s\n' "$key" "$value" >> "$temporary"
+  /var/jb/usr/bin/chown mobile:mobile "$temporary" 2>/dev/null || true
+  /var/jb/usr/bin/chmod 600 "$temporary" 2>/dev/null || true
+  /var/jb/usr/bin/mv -f "$temporary" "$config"
+}
+
+retire_legacy_relays() {
+  /var/jb/usr/bin/rm -f "$config_dir/lan-proxy"
+}
+
+start_services() {
+  set_flag "$core_flag"
+  set_flag "$relay_flag"
+  if ! wait_for_job "$label" 30; then
+    echo "OpenCode server job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+    return 1
+  fi
+  if ! wait_for_job "$proxy_label" 30; then
+    echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+    return 1
+  fi
+  if ! healthy "http://127.0.0.1:$internal_port/api/info"; then
+    kill_pid "$(job_pid "$label")"
+  fi
+  wait_for_core
+  "$import_pending"
+  if ! healthy "http://127.0.0.1:$(configured_port)/api/info"; then
+    kill_pid "$(job_pid "$proxy_label")"
+  fi
+  wait_for_relay
+  refresh_webclip
+}
+
+case "${1:-status}" in
+  start)
+    acquire_lock
+    retire_legacy_relays
+    start_services
+    ;;
+  stop)
+    acquire_lock
+    stop_service "$proxy_label" "$relay_flag" || true
+    stop_service "$label" "$core_flag" || true
+    ;;
+  restart)
+    acquire_lock
+    retire_legacy_relays
+    # Stop the relay first so it cannot race the core during recovery.
+    stop_service "$proxy_label" "$relay_flag" || true
+    set_flag "$core_flag"
+    if ! wait_for_job "$label" 30; then
+      echo "OpenCode server job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+      exit 1
+    fi
+    kill_pid "$(job_pid "$label")"
+    wait_for_core
+    "$import_pending"
+    set_flag "$relay_flag"
+    if ! wait_for_job "$proxy_label" 30; then
+      echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+      exit 1
+    fi
+    wait_for_relay
+    refresh_webclip
+    ;;
+  exposure)
+    acquire_lock
+    retire_legacy_relays
+    set_flag "$core_flag"
+    if ! healthy "http://127.0.0.1:$internal_port/api/info"; then
+      if wait_for_job "$label" 30; then
+        kill_pid "$(job_pid "$label")"
+      fi
+      wait_for_core
+    fi
+    stop_service "$proxy_label" "$relay_flag" || true
+    set_flag "$relay_flag"
+    if ! wait_for_job "$proxy_label" 30; then
+      echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+      exit 1
+    fi
+    wait_for_relay
+    wait_for_access_interfaces
+    ;;
+  enable)
+    set_config_value AUTO_START 1
+    set_flag "$core_flag"
+    set_flag "$relay_flag"
+    ;;
+  disable)
+    set_config_value AUTO_START 0
+    # Keep currently running processes alive; clearing the flags prevents
+    # launchd from starting them again at boot.
+    clear_flag "$core_flag"
+    clear_flag "$relay_flag"
+    ;;
+  status)
+    "$launchctl" print "$label" 2>/dev/null || true
+    "$launchctl" print "$proxy_label" 2>/dev/null || true
+    wait_for_core
+    wait_for_relay
+    wait_for_access_interfaces
+    echo "OpenCode core and relay are responding; configured network interfaces are ready."
+    ;;
+  check)
+    wait_for_core
+    wait_for_relay
+    wait_for_access_interfaces
+    echo "OpenCode core and relay are responding; configured network interfaces are ready."
+    ;;
+  url)
+    echo "http://127.0.0.1:$(configured_port)/"
+    ;;
+  logs)
+    exec /var/jb/usr/bin/tail -f /var/mobile/Library/Logs/OpenCode/server.log \
+      /var/mobile/Library/Logs/OpenCode/server.err.log \
+      /var/mobile/Library/Logs/OpenCode/expose.err.log
+    ;;
+  *)
+    echo "Usage: opencode-server {start|stop|restart|exposure|enable|disable|status|check|url|logs}" >&2
+    exit 2
+    ;;
+esac

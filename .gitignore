@@ -1,0 +1,11 @@
+# Build and staging output
+build/stage/
+previous/
+
+# Local/editor/system files
+.DS_Store
+*.log
+*.tmp
+
+# Package copies superseded by the current build
+base/

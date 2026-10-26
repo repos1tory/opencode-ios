@@ -1,0 +1,295 @@
+#!/var/jb/bin/sh
+set -e
+
+mkdir -p /var/mobile/Library/Logs/OpenCode
+chown -R mobile:mobile /var/mobile/Library/Logs/OpenCode
+chmod 700 /var/mobile/Library/Logs/OpenCode
+
+opencode_home="/var/jb/var/mobile"
+mkdir -p "$opencode_home/.config/opencode"
+mkdir -p "$opencode_home/.local/share/opencode"
+chown mobile:mobile "$opencode_home/.config" "$opencode_home/.config/opencode"
+chown mobile:mobile "$opencode_home/.local" "$opencode_home/.local/share" "$opencode_home/.local/share/opencode"
+chmod 700 "$opencode_home/.config/opencode"
+/var/jb/usr/bin/rm -f /var/mobile/.config/opencode-ios/password
+
+config="/var/mobile/.config/opencode-ios/settings.conf"
+mkdir -p /var/mobile/.config/opencode-ios
+chown mobile:mobile /var/mobile/.config/opencode-ios
+chmod 700 /var/mobile/.config/opencode-ios
+
+launchctl="/var/jb/usr/bin/launchctl"
+domain="user/501"
+plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-server.plist"
+proxy_plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-expose-proxy.plist"
+label="$domain/com.alsinas.opencode-server"
+proxy_label="$domain/com.alsinas.opencode-expose-proxy"
+legacy_lan_label="$domain/com.alsinas.opencode-lan-proxy"
+legacy_tailscale_label="$domain/com.alsinas.opencode-tailscale-proxy"
+
+# Keep every already-loaded server or relay alive through package installation.
+defer_activation=0
+if "$launchctl" print "$label" >/dev/null 2>&1 || \
+   "$launchctl" print "$proxy_label" >/dev/null 2>&1 || \
+   "$launchctl" print "$legacy_lan_label" >/dev/null 2>&1 || \
+   "$launchctl" print "$legacy_tailscale_label" >/dev/null 2>&1; then
+  defer_activation=1
+fi
+
+# Older packages used LAN=1 plus a shared Basic Auth password and did not have
+# a TAILSCALE setting. Keep those installs private until the user enables a
+# network path in Settings.
+port=4096
+auto_start=1
+has_tailscale=0
+if [ -r "$config" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      PORT) port="$value" ;;
+      AUTO_START) auto_start="$value" ;;
+      TAILSCALE) has_tailscale=1 ;;
+    esac
+  done < "$config"
+fi
+if [ "$defer_activation" = "0" ] && [ -r "$config" ] && [ "$has_tailscale" = "0" ]; then
+  case "$port" in ''|*[!0-9]*) port=4096 ;; esac
+  if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
+  if [ "$auto_start" != "0" ]; then auto_start=1; fi
+  temporary="$config.new"
+  printf 'PORT=%s\nLAN=0\nTAILSCALE=0\nAUTO_START=%s\n' "$port" "$auto_start" > "$temporary"
+  chown mobile:mobile "$temporary"
+  chmod 600 "$temporary"
+  /var/jb/usr/bin/mv "$temporary" "$config"
+fi
+
+stop_service() {
+  service_label="$1"
+  "$launchctl" bootout "$service_label" 2>/dev/null || true
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if ! "$launchctl" print "$service_label" >/dev/null 2>&1; then return 0; fi
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  echo "Timed out waiting for $service_label to stop." >&2
+  return 1
+}
+
+start_service() {
+  service_label="$1"
+  service_plist="$2"
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if "$launchctl" bootstrap "$domain" "$service_plist" 2>/dev/null; then return 0; fi
+    if "$launchctl" print "$service_label" >/dev/null 2>&1; then return 0; fi
+    /var/jb/usr/bin/sleep 1
+    attempt=$((attempt + 1))
+  done
+  echo "Could not start $service_label." >&2
+  return 1
+}
+
+case "$port" in ''|*[!0-9]*) port=4096 ;; esac
+if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
+server_port=4097
+
+# OpenCode has one canonical home. If an older package created its database
+# under /var/mobile, export those sessions through the API before stopping it,
+# import them into the canonical server, then move the source DB to a backup.
+legacy_db="/var/mobile/.local/share/opencode/opencode-ios-port.db"
+migration_root="$opencode_home/.local/share/opencode-ios-migration"
+pending="$migration_root/pending"
+helper="/var/jb/usr/lib/opencode-ios/merge-sessions.mjs"
+importer="/var/jb/usr/lib/opencode-ios/import-pending-sessions.sh"
+node="/var/jb/usr/lib/opencode-ios/node"
+if [ -f "$legacy_db" ] && [ ! -f "$pending/manifest.json" ]; then
+  mkdir -p "$pending"
+  chown -R mobile:mobile "$migration_root"
+  chmod 700 "$migration_root" "$pending"
+
+  old_workdir="$("$launchctl" print "$label" 2>/dev/null | sed -n 's/^[[:space:]]*working directory = //p' | head -n 1)"
+  source_port="$port"
+  source_url="http://127.0.0.1:$source_port"
+  temporary_label="$domain/com.alsinas.opencode-ios-legacy-migration"
+  temporary_plist="/var/mobile/.config/opencode-ios/legacy-migration.plist"
+  temporary_port=44917
+  temporary_started=0
+
+  if [ "$old_workdir" = "/var/mobile" ] && /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 "$source_url/api/info" >/dev/null 2>&1; then
+    echo "Exporting sessions from the previous OpenCode data location."
+  else
+    source_port="$temporary_port"
+    source_url="http://127.0.0.1:$source_port"
+    cat > "$temporary_plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.alsinas.opencode-ios-legacy-migration</string>
+  <key>UserName</key><string>mobile</string>
+  <key>GroupName</key><string>mobile</string>
+  <key>ProgramArguments</key><array>
+    <string>/var/jb/usr/lib/opencode-ios/node</string>
+    <string>--predictable</string><string>--single-threaded</string><string>--disable-wasm-trap-handler</string>
+    <string>/var/jb/usr/lib/opencode-ios/opencode.mjs</string>
+    <string>serve</string><string>--hostname</string><string>127.0.0.1</string>
+    <string>--port</string><string>44917</string>
+  </array>
+  <key>WorkingDirectory</key><string>/var/mobile</string>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>/var/mobile</string>
+    <key>XDG_CACHE_HOME</key><string>/var/mobile/.cache</string>
+    <key>XDG_CONFIG_HOME</key><string>/var/mobile/.config</string>
+    <key>XDG_DATA_HOME</key><string>/var/mobile/.local/share</string>
+    <key>XDG_STATE_HOME</key><string>/var/mobile/.local/state</string>
+    <key>TMPDIR</key><string>/private/var/tmp</string>
+    <key>OPENCODE_DB</key><string>/var/mobile/.local/share/opencode/opencode-ios-port.db</string>
+    <key>OPENCODE_CONFIG_DIR</key><string>/var/mobile/.config/opencode</string>
+    <key>OPENCODE_IOS_DISABLE_SERVER_AUTH</key><string>1</string>
+  </dict>
+  <key>StandardOutPath</key><string>/var/mobile/Library/Logs/OpenCode/legacy-migration.log</string>
+  <key>StandardErrorPath</key><string>/var/mobile/Library/Logs/OpenCode/legacy-migration.err.log</string>
+</dict></plist>
+EOF
+    chown mobile:mobile "$temporary_plist"
+    chmod 600 "$temporary_plist"
+    "$launchctl" bootstrap "$domain" "$temporary_plist"
+    "$launchctl" kickstart "$temporary_label"
+    temporary_started=1
+    attempt=0
+    while [ "$attempt" -lt 120 ]; do
+      if /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 "$source_url/api/info" >/dev/null 2>&1; then
+        break
+      fi
+      /var/jb/usr/bin/sleep 1
+      attempt=$((attempt + 1))
+    done
+    if [ "$attempt" -ge 120 ]; then
+      "$launchctl" bootout "$temporary_label" 2>/dev/null || true
+      echo "Could not start the old data store for a safe session export; the source database was left untouched." >&2
+      exit 1
+    fi
+  fi
+
+  if ! "$node" --predictable --single-threaded --disable-wasm-trap-handler "$helper" export "$source_url" "$pending"; then
+    if [ "$temporary_started" = "1" ]; then "$launchctl" bootout "$temporary_label" 2>/dev/null || true; fi
+    echo "Session export failed; the old database was left untouched." >&2
+    exit 1
+  fi
+  if [ "$temporary_started" = "1" ]; then
+    "$launchctl" bootout "$temporary_label" 2>/dev/null || true
+    /var/jb/usr/bin/rm -f "$temporary_plist"
+  fi
+fi
+
+# Older packages used separate relay jobs. Remove them before starting the
+# consolidated proxy and the server pinned to the canonical home.
+
+# Remove the two relay jobs shipped by older package builds. They bind the
+# same Wi-Fi/Tailscale addresses as the consolidated exposure proxy.
+if [ "$defer_activation" = "0" ]; then
+  for legacy_name in com.alsinas.opencode-lan-proxy com.alsinas.opencode-tailscale-proxy; do
+    legacy_plist="/var/jb/Library/LaunchDaemons/${legacy_name}.plist"
+    "$launchctl" bootout "$domain/$legacy_name" 2>/dev/null || true
+    /var/jb/usr/bin/rm -f "$legacy_plist"
+  done
+  /var/jb/usr/bin/rm -f /var/mobile/.config/opencode-ios/lan-proxy
+fi
+
+# The watchdog and this script verify startup with curl. Fail loudly instead of
+# leaving a running package that can never pass a health check.
+if [ ! -x /var/jb/usr/bin/curl ]; then
+  echo "OpenCode Server requires curl. Install the curl package and try again." >&2
+  exit 1
+fi
+
+# The core and relay use KeepAlive PathState flags instead of RunAtLoad so
+# that the mobile user can stop/start them from Settings without sudo.
+config_dir=/var/mobile/.config/opencode-ios
+core_flag="$config_dir/server.enabled"
+relay_flag="$config_dir/relay.enabled"
+if [ "$auto_start" = "1" ]; then
+  : >"$core_flag"
+  : >"$relay_flag"
+  /var/jb/usr/bin/chown mobile:mobile "$core_flag" "$relay_flag"
+  /var/jb/usr/bin/chmod 600 "$core_flag" "$relay_flag"
+else
+  /var/jb/usr/bin/rm -f "$core_flag" "$relay_flag"
+fi
+
+/var/jb/usr/bin/chmod 755 /var/jb/Library/LaunchDaemons
+/var/jb/usr/bin/chmod 644 "$plist"
+/var/jb/usr/bin/chmod 644 "$proxy_plist"
+if [ "$defer_activation" = "1" ]; then
+  echo "OpenCode update installed. The running server and relay were left unchanged; press Restart Server in Settings when ready to activate the update."
+else
+  stop_service "$proxy_label"
+  stop_service "$label"
+
+  auto_start=1
+  if [ -r "$config" ]; then
+    while IFS='=' read -r key value; do
+      [ "$key" = "AUTO_START" ] && auto_start="$value"
+    done < "$config"
+  fi
+  if [ "$auto_start" = "1" ]; then
+    "$launchctl" enable "$label" 2>/dev/null || true
+    "$launchctl" enable "$proxy_label" 2>/dev/null || true
+    start_service "$label" "$plist"
+    attempt=0
+    while [ "$attempt" -lt 90 ]; do
+      if /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 \
+        "http://127.0.0.1:$server_port/api/info" >/dev/null 2>&1; then
+        break
+      fi
+      /var/jb/usr/bin/sleep 1
+      attempt=$((attempt + 1))
+    done
+    if [ "$attempt" -ge 90 ]; then
+      echo "OpenCode core did not start on its private loopback port $server_port." >&2
+      exit 1
+    fi
+    start_service "$proxy_label" "$proxy_plist"
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+      if /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 \
+        "http://127.0.0.1:$port/api/info" >/dev/null 2>&1; then
+        break
+      fi
+      /var/jb/usr/bin/sleep 1
+      attempt=$((attempt + 1))
+    done
+    if [ "$attempt" -ge 30 ]; then
+      echo "The OpenCode network relay did not become healthy on port $port." >&2
+      exit 1
+    fi
+    "$importer"
+  else
+    "$launchctl" disable "$label" 2>/dev/null || true
+    "$launchctl" disable "$proxy_label" 2>/dev/null || true
+  fi
+fi
+/var/jb/usr/lib/opencode-ios/install-webclip.sh
+/var/jb/usr/bin/uicache -p /var/jb/Applications/OpenCode.app 2>/dev/null || true
+/var/jb/usr/bin/uicache -r 2>/dev/null || true
+# Load the periodic supervisor after the server package's normal setup. It
+# remains loaded even when AUTO_START is off; watchdog.sh reads settings.conf
+# and stays idle until the user enables the server again.
+watchdog_domain=system
+watchdog_label="$watchdog_domain/com.alsinas.opencode-watchdog"
+watchdog_plist=/var/jb/Library/LaunchDaemons/com.alsinas.opencode-watchdog.plist
+"$launchctl" enable "$watchdog_label" 2>/dev/null || true
+"$launchctl" bootout "$watchdog_label" 2>/dev/null || true
+attempt=0
+while [ "$attempt" -lt 10 ]; do
+  if "$launchctl" bootstrap "$watchdog_domain" "$watchdog_plist" 2>/dev/null; then break; fi
+  if "$launchctl" print "$watchdog_label" >/dev/null 2>&1; then break; fi
+  /var/jb/usr/bin/sleep 1
+  attempt=$((attempt + 1))
+done
+if [ "$attempt" -ge 10 ]; then
+  echo "Could not load the OpenCode uptime watchdog." >&2
+  exit 1
+fi
+
+exit 0
