@@ -1,11 +1,18 @@
 # OpenCode Server package patch
 
 This source updates the existing independent `com.alsinas.opencode-server`
-package to `2.0.28-0ios40`. Both the core server and network relay use launchd
+package to `2.0.28-0ios41`. Both the core server and network relay use launchd
 `KeepAlive`, so launchd immediately respawns them after a crash or jetsam exit.
 A resident watchdog loop checks both health endpoints every 10 seconds, and
 launchd keeps the watchdog itself running. It recovers hung processes with
 capped retry backoff. OpenLens is not involved.
+
+## Default workspace
+
+New sessions and the web UI's New Project picker start in `/var/mobile/OpenCode`
+(`On My iPad/OpenCode`). `$HOME` and all state stay in `/var/jb/var/mobile`, so the
+SQLite database is never on the File Provider volume and a session with no project
+selected cannot read `.ssh` or provider credentials.
 
 ## Server control without sudo
 
@@ -131,7 +138,7 @@ are retired by the watchdog.
 
 ## Source location on the device
 
-`/var/mobile/Projects/OpenCodeServer`
+`/var/mobile/OpenCode/opencode-ios`
 
 That folder keeps the package inputs, the base package used for rebuilding,
 and the generated `.deb`. `server.sh`, `opencode-server`, and both existing
@@ -153,7 +160,7 @@ set `AUTO_START=0` in the existing settings file before upgrading if the
 services must remain stopped.
 
 ```sh
-cd /var/mobile/Projects/OpenCodeServer
+cd /var/mobile/OpenCode/opencode-ios
 ./build-package.sh
 ```
 
@@ -161,13 +168,13 @@ Installing from the Sileo/Zebra repository does not require sudo. For a manual
 local install, run the package manager as root:
 
 ```sh
-sudo /var/jb/usr/bin/dpkg -i build/opencode-server-2.0.28-0ios40_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i build/opencode-server-2.0.28-0ios41_iphoneos-arm64.deb
 ```
 
 Before installing a manually downloaded package, verify its metadata:
 
 ```sh
-/var/jb/usr/bin/dpkg-deb -I opencode-server-2.0.28-0ios40_iphoneos-arm64.deb
+/var/jb/usr/bin/dpkg-deb -I opencode-server-2.0.28-0ios41_iphoneos-arm64.deb
 ```
 
 The package post-install script verifies `curl`, preserves legacy session data

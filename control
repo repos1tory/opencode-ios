@@ -1,6 +1,6 @@
 Package: com.alsinas.opencode-server
 Name: OpenCode Server (iOS)
-Version: 2.0.28-0ios40
+Version: 2.0.28-0ios41
 Architecture: iphoneos-arm64
 Maintainer: Local OpenCode iOS build
 Installed-Size: 128732

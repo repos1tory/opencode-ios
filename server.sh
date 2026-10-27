@@ -18,6 +18,15 @@ export TMPDIR="/private/var/tmp"
 unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD
 export OPENCODE_IOS_DISABLE_SERVER_AUTH=1
 
+# Workspace for new sessions and the web UI's New Project picker. Keep it out
+# of $HOME so a session with no project cannot see .ssh, .config or provider
+# credentials. State and the SQLite DB stay in $HOME (never on File Provider).
+if [ -d /var/mobile/OpenCode ]; then
+  cd /var/mobile/OpenCode
+else
+  echo "[server.sh] /var/mobile/OpenCode missing; staying in $HOME" >>"$HOME/.local/share/opencode/log/startup.log" 2>/dev/null || true
+fi
+
 NODE="/var/jb/usr/lib/opencode-ios/node"
 ENTRY="/var/jb/usr/lib/opencode-ios/opencode.mjs"
 HOST="127.0.0.1"

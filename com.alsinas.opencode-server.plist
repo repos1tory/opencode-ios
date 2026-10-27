@@ -13,7 +13,7 @@
     <key>GroupName</key>
     <string>mobile</string>
     <key>WorkingDirectory</key>
-    <string>/var/jb/var/mobile</string>
+    <string>/var/mobile/OpenCode</string>
     <key>EnvironmentVariables</key>
     <dict>
       <key>HOME</key>

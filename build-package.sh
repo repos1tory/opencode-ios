@@ -6,7 +6,7 @@ BIN=/var/jb/usr/bin
 BASE="$ROOT/base/opencode-server-2.0.28-0ios24_iphoneos-arm64.deb"
 BUILD="$ROOT/build"
 STAGE="$BUILD/stage"
-PACKAGE="$BUILD/opencode-server-2.0.28-0ios40_iphoneos-arm64.deb"
+PACKAGE="$BUILD/opencode-server-2.0.28-0ios41_iphoneos-arm64.deb"
 
 if [ ! -r "$BASE" ]; then
   echo "Missing base package: $BASE" >&2
