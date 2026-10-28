@@ -13,6 +13,7 @@ assert.equal(Atomics.load(values, 0), 1)
 const text = [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment('A👨‍👩‍👧‍👦e\u0301')]
 assert.equal(text.length, 3)
 assert.equal(text[1].segment, '👨‍👩‍👧‍👦')
+assert.equal([...new Intl.Segmenter('en', { granularity: 'word' }).segment('hello world')].length, 3)
 const db = new DatabaseSync(':memory:')
 assert.equal(db.prepare('select 42 as value').get().value, 42)
 db.close()
