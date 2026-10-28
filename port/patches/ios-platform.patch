@@ -1,0 +1,255 @@
+diff --git a/packages/cli/script/node-assets.ts b/packages/cli/script/node-assets.ts
+index 2b2a8d5..10f3da4 100644
+--- a/packages/cli/script/node-assets.ts
++++ b/packages/cli/script/node-assets.ts
+@@ -24,17 +24,19 @@ export async function collectNodeAssets(target: NodeTarget) {
+     arch: target.arch,
+     ...(target.platform === "linux" ? { libc: "glibc" as const } : {}),
+   })
+-  const ptyEntry = fileURLToPath(import.meta.resolve(target.nodePtyPackage))
+-  const ptyRoot = path.resolve(path.dirname(ptyEntry), "..")
++  const ptyEntry = target.platform === "ios" ? undefined : fileURLToPath(import.meta.resolve(target.nodePtyPackage))
++  const ptyRoot = ptyEntry ? path.resolve(path.dirname(ptyEntry), "..") : undefined
+   const assets: NodeAsset[] = [
+-    ...getNodeAssets({
++    ...(target.platform === "ios" ? [] : getNodeAssets({
+       platform: target.platform,
+       arch: target.arch,
+       ...(target.platform === "linux" ? { libc: "glibc" as const } : {}),
+-    }),
++    })),
++    ...(target.platform === "ios" ? [] : [
+     { key: target.parcelWatcherAsset, source: fileURLToPath(import.meta.resolve(target.parcelWatcherPackage)) },
+     { key: target.fffAsset, source: fileURLToPath(import.meta.resolve(target.fffPackage)) },
+     { key: target.fffFfiAsset, source: fileURLToPath(import.meta.resolve(target.fffFfiPackage)) },
++    ]),
+     {
+       key: photonWasmAsset,
+       source: fileURLToPath(import.meta.resolve(photonWasmAsset)),
+@@ -48,11 +50,11 @@ export async function collectNodeAssets(target: NodeTarget) {
+       source: path.resolve(dir, "../ui/src/assets/audio", path.basename(key)),
+     })),
+     ...(opencodePty && target.opencodePtyAsset ? [{ key: target.opencodePtyAsset, source: opencodePty.source }] : []),
+-    ...(await collectFiles(ptyRoot))
++    ...(ptyRoot ? await collectFiles(ptyRoot) : [])
+       .filter((relative) => !relative.endsWith(".map") && !relative.endsWith(".pdb"))
+       .map((relative) => ({
+         key: `${target.nodePtyPackage}/${relative}`,
+-        source: path.join(ptyRoot, relative),
++        source: path.join(ptyRoot ?? "", relative),
+       })),
+   ]
+   const unique = [...new Map(assets.map((asset) => [asset.key, asset])).values()]
+diff --git a/packages/cli/src/cpu-profile.ts b/packages/cli/src/cpu-profile.ts
+index bd36528..38a6eb0 100644
+--- a/packages/cli/src/cpu-profile.ts
++++ b/packages/cli/src/cpu-profile.ts
+@@ -1,13 +1,15 @@
++const runtimePlatform: string = process.platform
+ export * as CpuProfile from "./cpu-profile"
+
+ import { Global } from "@opencode/util/global"
+ import { Effect, FileSystem, Queue } from "effect"
+-import { Session } from "node:inspector"
++import type { Session } from "node:inspector"
++import { writeFile } from "node:fs/promises"
+ import path from "node:path"
+
+ export const listen = Effect.gen(function* () {
+   const global = yield* Global.Service
+-  if (process.platform === "win32") return
++  if (process.platform === "win32" || runtimePlatform === "ios") return
+   const signals = yield* Queue.dropping<void>(1)
+   yield* Effect.acquireRelease(
+     Effect.sync(() => {
+@@ -36,7 +38,8 @@ function run<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
+     Effect.gen(function* () {
+       const fs = yield* FileSystem.FileSystem
+       yield* fs.makeDirectory(path.dirname(target), { recursive: true })
+-      const session = new Session()
++      const inspector = yield* Effect.promise(() => import("node:inspector"))
++      const session = new inspector.Session()
+       session.connect()
+       yield* command(session, "Profiler.enable")
+       yield* command(session, "Profiler.start")
+@@ -51,7 +54,7 @@ function run<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
+             session.post("Profiler.stop", (error, result) => {
+               session.disconnect()
+               if (error) return reject(error)
+-              Bun.write(target, JSON.stringify(result.profile)).then(() => resolve(), reject)
++              writeFile(target, JSON.stringify(result.profile)).then(() => resolve(), reject)
+             })
+           }),
+       ).pipe(
+diff --git a/packages/cli/src/node/target.ts b/packages/cli/src/node/target.ts
+index dc4f43e..d5b9a1e 100644
+--- a/packages/cli/src/node/target.ts
++++ b/packages/cli/src/node/target.ts
+@@ -1,4 +1,4 @@
+-const platforms = ["darwin", "linux", "win32"] as const
++const platforms = ["darwin", "linux", "win32", "ios"] as const
+
+ export type NodeTarget = ReturnType<typeof nodeTarget>
+
+@@ -13,7 +13,7 @@ export function nodeTarget(platform: string, arch: string) {
+   const parcelWatcherPackage = `@parcel/watcher-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-glibc" : ""}`
+   const fffPackage = `@ff-labs/fff-bin-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-gnu" : ""}`
+   const fffFfiPackage = `@yuuang/ffi-rs-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-gnu" : targetPlatform === "win32" ? "-msvc" : ""}`
+-  const opencodePtyAsset = targetPlatform === "win32" ? "opencode-pty/opencode-pty.exe" : "opencode-pty/opencode-pty"
++  const opencodePtyAsset = targetPlatform === "ios" ? undefined : targetPlatform === "win32" ? "opencode-pty/opencode-pty.exe" : "opencode-pty/opencode-pty"
+
+   return {
+     platform: targetPlatform,
+diff --git a/packages/cli/vite.node.config.ts b/packages/cli/vite.node.config.ts
+index 18ddd2a..3a2024d 100644
+--- a/packages/cli/vite.node.config.ts
++++ b/packages/cli/vite.node.config.ts
+@@ -163,7 +163,10 @@ import __cjs_mod__ from "node:module"
+ import { chmodSync as __ocChmod, existsSync as __ocExists, lstatSync as __ocLstat, mkdirSync as __ocMkdir, renameSync as __ocRename, rmSync as __ocRm, writeFileSync as __ocWrite } from "node:fs"
+ import { tmpdir as __ocTmpdir } from "node:os"
+ import __ocPath from "node:path"
+-import { getAssetKeys as __ocAssetKeys, getRawAsset as __ocRawAsset, isSea as __ocIsSea } from "node:sea"
++import __ocSea from "node:sea"
++const __ocIsSea = __ocSea.isSea
++const __ocAssetKeys = () => __ocSea.getAssetKeys()
++const __ocRawAsset = __ocSea.getRawAsset
+ import { fileURLToPath as __ocFileURLToPath } from "node:url"
+ const __filename = import.meta.filename
+ const __dirname = import.meta.dirname
+@@ -290,7 +293,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
+     ssr: { noExternal: true },
+     build: {
+       ssr: "src/node/index.ts",
+-      target: "node26",
++      target: input.target.platform === "ios" ? "node22" : "node26",
+       outDir: "dist-node",
+       emptyOutDir: false,
+       minify: true,
+diff --git a/packages/core/src/filesystem/watcher.ts b/packages/core/src/filesystem/watcher.ts
+index ae359e3..53cc1ca 100644
+--- a/packages/core/src/filesystem/watcher.ts
++++ b/packages/core/src/filesystem/watcher.ts
+@@ -1,3 +1,4 @@
++const runtimePlatform: string = process.platform
+ export * as Watcher from "./watcher.js"
+
+ // @ts-ignore
+@@ -225,6 +226,19 @@ export const nativeLayer = Layer.succeed(
+           ),
+         )
+       }
++      if (runtimePlatform === "ios") {
++        return Effect.try(() => {
++          const subscription = watch(input.target, { recursive: true }, (_event, file) => {
++            const target = file ? path.resolve(input.target, file.toString()) : input.target
++            if (input.ignore.some((ignore) => target === ignore || target.startsWith(ignore + path.sep))) return
++            input.publish({ path: target, type: "update" })
++          })
++          subscription.on("error", (error: unknown) =>
++            Effect.runFork(Effect.logError("watcher callback failed", { path: input.target, error })),
++          )
++          return { unsubscribe: () => Promise.resolve(subscription.close()), backend: "node-recursive" }
++        }).pipe(Effect.catch((error) => Effect.logError("failed to watch directory", { path: input.target, error }).pipe(Effect.as(undefined))))
++      }
+       return subscribeDirectory(watcher(), getBackend(), input.target, input.ignore, input.publish)
+     },
+   }),
+diff --git a/packages/core/src/persistent-pty/binary.node.ts b/packages/core/src/persistent-pty/binary.node.ts
+index ef758ad..336d660 100644
+--- a/packages/core/src/persistent-pty/binary.node.ts
++++ b/packages/core/src/persistent-pty/binary.node.ts
+@@ -1,4 +1,5 @@
+-export const available = true
++const runtimePlatform: string = process.platform
++export const available = runtimePlatform !== "ios"
+
+ export async function resolveBinary() {
+   return process.env.OPENCODE_PTY_BIN || "opencode-pty"
+diff --git a/packages/core/src/pty/pty.ios.ts b/packages/core/src/pty/pty.ios.ts
+new file mode 100644
+index 0000000..ae35b51
+--- /dev/null
++++ b/packages/core/src/pty/pty.ios.ts
+@@ -0,0 +1,56 @@
++import { spawn } from "node:child_process"
++import { EventEmitter } from "node:events"
++import { StringDecoder } from "node:string_decoder"
++import type { Opts, Proc } from "./pty"
++
++export function open(file: string, args: string[], opts: Opts): Proc {
++  const helper = process.env.OPENCODE_IOS_PTY_HELPER
++  if (!helper) throw new Error("OPENCODE_IOS_PTY_HELPER is required for iOS terminals")
++  const child = spawn(helper, [String(opts.cols ?? 80), String(opts.rows ?? 24), file, ...args], {
++    cwd: opts.cwd,
++    env: { ...process.env, ...opts.env, TERM: opts.name },
++    stdio: ["pipe", "pipe", "pipe"],
++  })
++  const events = new EventEmitter()
++  const decoder = new StringDecoder("utf8")
++  let error = ""
++  child.stderr.on("data", (data: Buffer) => { error = (error + data.toString()).slice(-4096) })
++  child.stdout.on("data", (data: Buffer) => events.emit("data", decoder.write(data)))
++  child.on("error", (cause) => { error = cause.message })
++  child.on("close", (code, signal) => {
++    const tail = decoder.end()
++    if (tail) events.emit("data", tail)
++    if (error) events.emit("data", error)
++    events.emit("exit", { exitCode: code ?? 1, ...(signal ? { signal } : {}) })
++  })
++  child.stdin.on("error", () => {})
++  function frame(type: number, data: Buffer) {
++    if (!child.stdin.writable) return
++    const header = Buffer.alloc(5)
++    header.writeUInt32BE(data.length + 1)
++    header[4] = type
++    if (data.length > 65536 || child.stdin.writableLength + data.length + 5 > 1024 * 1024) {
++      child.kill("SIGTERM")
++      throw new Error("iOS terminal input exceeded its queue limit")
++    }
++    child.stdin.write(Buffer.concat([header, data]))
++  }
++  return {
++    pid: child.pid ?? -1,
++    onData(listener) { events.on("data", listener); return { dispose: () => { events.off("data", listener) } } },
++    onExit(listener) { events.on("exit", listener); return { dispose: () => { events.off("exit", listener) } } },
++    write(data) {
++      const bytes = Buffer.from(data)
++      for (let offset = 0; offset < bytes.length; offset += 65536) frame(73, bytes.subarray(offset, offset + 65536))
++    },
++    resize(cols, rows) {
++      const size = Buffer.alloc(4)
++      size.writeUInt16BE(Math.max(1, Math.min(65535, cols)), 0)
++      size.writeUInt16BE(Math.max(1, Math.min(65535, rows)), 2)
++      frame(82, size)
++    },
++    kill(signal = "SIGTERM") { child.kill(signal as NodeJS.Signals) },
++  }
++}
++
++export * as IosPty from "./pty.ios"
+diff --git a/packages/core/src/pty/pty.node.ts b/packages/core/src/pty/pty.node.ts
+index 9545edf..c577b85 100644
+--- a/packages/core/src/pty/pty.node.ts
++++ b/packages/core/src/pty/pty.node.ts
+@@ -1,16 +1,19 @@
++const runtimePlatform: string = process.platform
+ import { createRequire } from "node:module"
+ import { isSea } from "node:sea"
++import { IosPty } from "./pty.ios"
+ import type { spawn } from "@lydell/node-pty"
+ import type { Opts, Proc } from "./pty.js"
+
+ export type { Disp, Exit, Opts, Proc } from "./pty.js"
+
+-const pty = createRequire(import.meta.url)(process.env.OPENCODE_NODE_PTY_PATH ?? "@lydell/node-pty") as {
++const pty = runtimePlatform === "ios" ? undefined : createRequire(import.meta.url)(process.env.OPENCODE_NODE_PTY_PATH ?? "@lydell/node-pty") as {
+   spawn: typeof spawn
+ }
+
+ function spawnPty(file: string, args: string[], opts: Opts): Proc {
+-  const proc = pty.spawn(file, args, process.platform === "win32" && isSea() ? { ...opts, useConptyDll: true } : opts)
++  if (runtimePlatform === "ios") return IosPty.open(file, args, opts)
++  const proc = pty!.spawn(file, args, process.platform === "win32" && isSea() ? { ...opts, useConptyDll: true } : opts)
+   return {
+     pid: proc.pid,
+     onData(listener) {

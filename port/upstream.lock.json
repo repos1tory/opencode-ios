@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/anomalyco/opencode.git",
+  "tag": "v2.2.0",
+  "commit": "1097e2668b1e08ad63bdf0b1c4860b9bc01e420c",
+  "runtimeBaseline": "repos1tory/node-ios@8782385144b7a1eca16dbb2fbfbc15fefe4eb211",
+  "runtimeVersion": "22.19.0",
+  "status": "candidate-in-development"
+}

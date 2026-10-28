@@ -9,3 +9,6 @@ previous/
 
 # Package copies superseded by the current build
 base/
+
+# Local v2 build products and dependency trees
+build/v2-candidate/
