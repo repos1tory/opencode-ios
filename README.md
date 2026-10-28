@@ -132,10 +132,11 @@ the title either. The feature is instead split into removable pieces:
 * `battery.c` compiles to `opencode-battery`, a ~50 KB helper that reads the
   public `IOPowerSources` API and prints one JSON line. No daemon, root, or
   entitlement is involved.
-* `patch-battery-endpoint.mjs` adds one virtual path, `/_ios/battery.json`, to
-  the web UI asset loader. The request handler already consults that loader for
-  every non-API path, so the patch is one special case in one function. The
-  helper result is cached for one second.
+* `port/ios/endpoints.mjs` adds two virtual paths, `/_ios/battery.json` and
+  `/_ios/port.json`, to the web UI asset loader. The request handler already
+  consults that loader for every non-API path, so the patch is two special
+  cases in one function. The battery result is cached for one second; the port
+  metadata is read from `port.json` and merged with the daily update state.
 * `ui/ios-battery.js` is a self-contained module that only sets
   `document.title`; it never touches an application element. `patch-ui.mjs`
   adds it to the asset archive under a content hash and inserts exactly one
@@ -149,9 +150,9 @@ problem for the session-sync patch.
 
 The build needs `clang` and the iPhoneOS SDK at
 `/var/jb/usr/share/SDKs/iPhoneOS.sdk` to compile the helper. To remove the
-battery level, delete `battery.c`, `ui/ios-battery.js`, `patch-ui.mjs`,
-`patch-battery-endpoint.mjs`, and their lines in `build-package.sh`; nothing
-else depends on them.
+battery level, delete `battery.c`, `ui/ios-battery.js`, `patch-ui.mjs`, the
+battery branch in `port/ios/endpoints.mjs`, and their lines in
+`build-package.sh`; nothing else depends on them.
 
 ## Why sessions stopped on their own
 
