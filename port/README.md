@@ -20,7 +20,7 @@ patches here.
 ## Versioning
 
 - `VERSION` pins the upstream release and commit.
-- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios1`).
+- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios2`).
 - The server reports the **upstream** version at `/api/info`.
 - `/_ios/port.json` reports upstream, commit, port revision, and update state.
 
@@ -36,3 +36,6 @@ patches here.
 The CI workflow only needs the official tag/commit. It does not contain any
 iOS patches, so an upstream release can always be built unmodified first and
 then validated against the patch anchors.
+
+For the process, supervision, network-gate, and web-UI injection details, see
+[`../docs/architecture.md`](../docs/architecture.md).
