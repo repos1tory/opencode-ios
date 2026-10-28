@@ -1,0 +1,7 @@
+# Upstream OpenCode release this iOS port is built from.
+UPSTREAM_VERSION=2.2.0
+UPSTREAM_COMMIT=f993a89d13c73ff6f6537d6b97e78e138a3ea363
+
+# iOS port revision for this upstream version. Bump when the port layer
+# (patches, packaging, helpers) changes without a new upstream release.
+PORT_REVISION=1

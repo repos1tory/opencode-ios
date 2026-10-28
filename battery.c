@@ -1,15 +1,27 @@
-// Minimal iOS battery reader for the OpenCode web UI widget.
+// Minimal iOS battery reader for the OpenCode web UI title.
 //
 // Prints one JSON object, e.g.
-//   {"ok":true,"level":87,"charging":false,"state":"Battery Power","minutes":-1}
+//   {"ok":true,"level":11,"charging":false,"present":true,"minutes":64,
+//    "state":"Battery Power","basis":"raw"}
 //
-// Uses the public IOPowerSources API. The PS headers are not part of the
-// on-device SDK, so the three functions are declared here and the string keys
-// are the documented CFString values.
+// The percentage comes from the usable gauge capacities:
+//
+//   AppleRawCurrentCapacity / AppleRawMaxCapacity
+//
+// The legacy IOPowerSources "Current Capacity" is a percentage of the *design*
+// capacity, so a degraded battery reads low (10% when the device is at 12%).
+// AbsoluteCapacity / BatteryData.StateOfCharge include the low-battery reserve
+// and over-report (18% for the same charge), which is why those are only a last
+// resort. The usable ratio matches powerd's notify state, the system's time
+// remaining estimate, and BatteryCenter's display rounding.
+//
+// The PS headers are not part of the on-device SDK, so the three functions are
+// declared here and the string keys are the documented CFString values.
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <stdio.h>
+#include <IOKit/IOKitLib.h>
 #include <math.h>
+#include <stdio.h>
 
 typedef const void *IOPSBlob;
 
@@ -17,21 +29,46 @@ extern IOPSBlob IOPSCopyPowerSourcesInfo(void);
 extern CFArrayRef IOPSCopyPowerSourcesList(IOPSBlob blob);
 extern CFDictionaryRef IOPSGetPowerSourceDescription(IOPSBlob blob, CFTypeRef source);
 
-static int intValue(CFDictionaryRef d, CFStringRef key, int fallback) {
+static long long numberValue(CFDictionaryRef d, CFStringRef key, long long fallback) {
+  if (d == NULL) return fallback;
   CFTypeRef v = CFDictionaryGetValue(d, key);
   if (v == NULL || CFGetTypeID(v) != CFNumberGetTypeID()) return fallback;
-  int out = fallback;
-  if (!CFNumberGetValue((CFNumberRef)v, kCFNumberIntType, &out)) return fallback;
+  long long out = fallback;
+  if (!CFNumberGetValue((CFNumberRef)v, kCFNumberLongLongType, &out)) return fallback;
   return out;
 }
 
+static int intValue(CFDictionaryRef d, CFStringRef key, int fallback) {
+  long long out = numberValue(d, key, fallback);
+  if (out < -2147483647LL || out > 2147483647LL) return fallback;
+  return (int)out;
+}
+
 static int boolValue(CFDictionaryRef d, CFStringRef key, int fallback) {
+  if (d == NULL) return fallback;
   CFTypeRef v = CFDictionaryGetValue(d, key);
   if (v == NULL || CFGetTypeID(v) != CFBooleanGetTypeID()) return fallback;
   return CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0;
 }
 
+static CFDictionaryRef dictionaryValue(CFDictionaryRef d, CFStringRef key) {
+  if (d == NULL) return NULL;
+  CFTypeRef v = CFDictionaryGetValue(d, key);
+  if (v == NULL || CFGetTypeID(v) != CFDictionaryGetTypeID()) return NULL;
+  return (CFDictionaryRef)v;
+}
+
+// Same rounding as BatteryCenter's display mapping: 11.8 -> 12, 18.4 -> 18.
+static int percentOf(long long value, long long maximum) {
+  if (maximum <= 0 || value < 0) return -1;
+  long long percent = (value * 100 + maximum / 2) / maximum;
+  if (percent < 0) return 0;
+  if (percent > 100) return 100;
+  return (int)percent;
+}
+
 static void printString(CFDictionaryRef d, CFStringRef key) {
+  if (d == NULL) return;
   CFTypeRef v = CFDictionaryGetValue(d, key);
   if (v == NULL || CFGetTypeID(v) != CFStringGetTypeID()) return;
   char buf[128];
@@ -53,66 +90,77 @@ static void printString(CFDictionaryRef d, CFStringRef key) {
 
 int main(void) {
   IOPSBlob blob = IOPSCopyPowerSourcesInfo();
-  if (blob == NULL) {
-    printf("{\"ok\":false,\"error\":\"no power source info\"}\n");
-    return 0;
-  }
-  CFArrayRef list = IOPSCopyPowerSourcesList(blob);
-  if (list == NULL || CFArrayGetCount(list) == 0) {
-    printf("{\"ok\":false,\"error\":\"no power sources\"}\n");
-    if (list) CFRelease(list);
-    CFRelease(blob);
-    return 0;
-  }
-
+  CFArrayRef list = blob ? IOPSCopyPowerSourcesList(blob) : NULL;
   CFDictionaryRef battery = NULL;
-  CFIndex count = CFArrayGetCount(list);
+  CFDictionaryRef description = NULL;
+  CFIndex count = list ? CFArrayGetCount(list) : 0;
+
   for (CFIndex i = 0; i < count; i++) {
     CFDictionaryRef d = IOPSGetPowerSourceDescription(blob, CFArrayGetValueAtIndex(list, i));
     if (d == NULL) continue;
+    if (description == NULL) description = d;
     CFTypeRef type = CFDictionaryGetValue(d, CFSTR("Type"));
     if (type && CFGetTypeID(type) == CFStringGetTypeID() &&
         CFStringCompare((CFStringRef)type, CFSTR("InternalBattery"), 0) == kCFCompareEqualTo) {
+      description = d;
       battery = d;
       break;
     }
-    if (battery == NULL) battery = d;
   }
+  if (battery == NULL) battery = description;
 
-  if (battery == NULL) {
-    printf("{\"ok\":false,\"error\":\"no battery description\"}\n");
-    CFRelease(list);
-    CFRelease(blob);
-    return 0;
+  io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMPowerSource"));
+  CFMutableDictionaryRef properties = NULL;
+  if (service) {
+    IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0);
+    IOObjectRelease(service);
   }
+  CFDictionaryRef gauge = dictionaryValue(properties, CFSTR("BatteryData"));
 
-  int current = intValue(battery, CFSTR("Current Capacity"), -1);
-  int max = intValue(battery, CFSTR("Max Capacity"), -1);
   int present = boolValue(battery, CFSTR("Is Present"), 1);
-  int charging = boolValue(battery, CFSTR("Is Charging"), 0);
+  int charging = properties ? boolValue(properties, CFSTR("IsCharging"), -1) : -1;
+  if (charging < 0) charging = boolValue(battery, CFSTR("Is Charging"), 0);
 
+  const char *basis = "none";
   int level = -1;
-  if (current >= 0 && max > 0) {
-    level = (int)llround(((double)current / (double)max) * 100.0);
-    if (level < 0) level = 0;
-    if (level > 100) level = 100;
+
+  long long raw = numberValue(properties, CFSTR("AppleRawCurrentCapacity"), -1);
+  long long rawMax = numberValue(properties, CFSTR("AppleRawMaxCapacity"), -1);
+  long long stateOfCharge = numberValue(gauge, CFSTR("StateOfCharge"), -1);
+  long long current = numberValue(battery, CFSTR("Current Capacity"), -1);
+  long long maximum = numberValue(battery, CFSTR("Max Capacity"), -1);
+
+  if (raw >= 0 && rawMax > 0) {
+    level = percentOf(raw, rawMax);
+    basis = "raw";
+  } else if (current >= 0 && maximum > 0) {
+    level = percentOf(current, maximum);
+    basis = "iops";
+  } else if (stateOfCharge >= 0 && stateOfCharge <= 100) {
+    level = (int)stateOfCharge;
+    basis = "state-of-charge";
   }
 
-  // Time remaining is only meaningful while on battery; time to full only
-  // while charging. The system reports -1 when it is still estimating.
-  int minutes = charging ? intValue(battery, CFSTR("Time to Full Charge"), -1)
-                         : intValue(battery, CFSTR("Time to Empty"), -1);
+  int minutes = -1;
+  if (charging) {
+    minutes = intValue(battery, CFSTR("Time to Full Charge"), -1);
+  } else {
+    minutes = intValue(battery, CFSTR("Time to Empty"), -1);
+    if (minutes <= 0) minutes = intValue(properties, CFSTR("TimeRemaining"), -1);
+  }
 
-  printf("{\"ok\":%s,\"level\":%d,\"charging\":%s,\"present\":%s,\"minutes\":%d,\"state\":",
+  printf("{\"ok\":%s,\"level\":%d,\"charging\":%s,\"present\":%s,\"minutes\":%d,\"basis\":\"%s\",\"state\":",
          present && level >= 0 ? "true" : "false",
          level,
          charging ? "true" : "false",
          present ? "true" : "false",
-         minutes);
+         minutes,
+         basis);
   printString(battery, CFSTR("Power Source State"));
   printf("}\n");
 
-  CFRelease(list);
-  CFRelease(blob);
+  if (properties) CFRelease(properties);
+  if (list) CFRelease(list);
+  if (blob) CFRelease(blob);
   return 0;
 }

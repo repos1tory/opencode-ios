@@ -1,9 +1,12 @@
 #!/var/jb/bin/sh
 # OpenCode iOS server launcher (hardened for restart persistence).
-# Changes vs. original:
+# Changes vs. the split core+proxy build:
+#   * the server owns the public port directly and listens on every interface,
+#     so a Wi-Fi/DHCP/Tailscale change never leaves it bound to a stale address
+#   * network-gate.cjs enforces the LAN and Tailscale settings per connection
 #   * caps the V8 old-space so the process stops growing into jetsam territory
-#   * reclaims the loopback port before bind() so a stale listener cannot
-#     wedge startup with EADDRINUSE
+#   * reclaims the public port before bind() so a stale listener cannot wedge
+#     startup with EADDRINUSE
 #   * logs every start so restart frequency is observable
 set -e
 
@@ -17,6 +20,11 @@ export OPENCODE_CONFIG_DIR="$XDG_CONFIG_HOME/opencode"
 export TMPDIR="/private/var/tmp"
 unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD
 export OPENCODE_IOS_DISABLE_SERVER_AUTH=1
+# The upstream bundle ships macOS native watchers/fff binaries. Neither can
+# load on iOS, and both features are optional, so disable them rather than let
+# dlopen() terminate the process.
+export OPENCODE_DISABLE_FILEWATCHER=1
+export OPENCODE_DISABLE_FFF=1
 
 # Workspace for new sessions and the web UI's New Project picker. Keep it out
 # of $HOME so a session with no project cannot see .ssh, .config or provider
@@ -29,8 +37,10 @@ fi
 
 NODE="/var/jb/usr/lib/opencode-ios/node"
 ENTRY="/var/jb/usr/lib/opencode-ios/opencode.mjs"
-HOST="127.0.0.1"
-PORT="4097"
+GATE="/var/jb/usr/lib/opencode-ios/network-gate.cjs"
+CONFIG="/var/mobile/.config/opencode-ios/settings.conf"
+HOST="0.0.0.0"
+PORT="4096"
 # The session database is large and the server decodes multi-megabyte message
 # rows synchronously. 512 MB is not enough headroom for that plus the normal
 # provider/session caches, and the process died with a V8 heap OOM. 768 MB
@@ -40,8 +50,22 @@ HEAP_MB="${OPENCODE_HEAP_MB:-768}"
 LSOF="/var/jb/usr/sbin/lsof"
 LOG="/var/mobile/Library/Logs/OpenCode/server.err.log"
 
-# Single ownership of the loopback port: terminate any surviving listener so
-# the node process we exec below cannot fail with EADDRINUSE.
+if [ -r "$CONFIG" ]; then
+  while IFS='=' read -r key value; do
+    [ "$key" = "PORT" ] && PORT="$value"
+  done <"$CONFIG"
+fi
+case "$PORT" in ''|*[!0-9]*) PORT=4096 ;; esac
+if [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then PORT=4096; fi
+
+if [ ! -r "$GATE" ]; then
+  echo "[server.sh] network gate missing at $GATE; refusing to start" >>"$LOG" 2>/dev/null || true
+  exit 1
+fi
+
+# Single ownership of the public port: terminate any surviving listener so
+# the node process we exec below cannot fail with EADDRINUSE. This also
+# reclaims the port from the retired opencode-expose-proxy during an upgrade.
 if [ -x "$LSOF" ]; then
   stale="$("$LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
   if [ -n "$stale" ]; then
@@ -72,11 +96,12 @@ if [ -x "$SQLITE" ] && [ -f "$OPENCODE_DB" ]; then
     echo "[server.sh] stale session claim cleanup failed" >>"$LOG" 2>/dev/null || true
 fi
 
-echo "[server.sh] starting node pid=$$ heap=${HEAP_MB}MB port=$PORT $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG" 2>/dev/null || true
+echo "[server.sh] starting node pid=$$ heap=${HEAP_MB}MB host=$HOST port=$PORT $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG" 2>/dev/null || true
 
 exec "$NODE" \
   --predictable \
   --single-threaded \
   --disable-wasm-trap-handler \
   --max-old-space-size="$HEAP_MB" \
+  --require "$GATE" \
   "$ENTRY" serve --hostname "$HOST" --port "$PORT"

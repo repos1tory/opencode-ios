@@ -1,7 +1,10 @@
 #!/var/jb/bin/sh
-# Keep the OpenCode core and network relay available without tight crash loops.
-# The loaded launchd jobs own process creation, so this script never forks a
-# second server process. Failed recovery is retried forever with capped backoff.
+# Keep the OpenCode server available without tight crash loops. The loaded
+# launchd job owns process creation, so this script never forks a second server
+# process. Failed recovery is retried forever with capped backoff.
+#
+# Network exposure is part of the server now (network-gate.cjs), not a second
+# process, so this watchdog only supervises one job.
 
 BIN=/var/jb/usr/bin
 LAUNCHCTL=$BIN/launchctl
@@ -20,11 +23,7 @@ CAT=$BIN/cat
 
 DOMAIN=user/501
 CORE=com.alsinas.opencode-server
-RELAY=com.alsinas.opencode-expose-proxy
 CORE_PLIST=/var/jb/Library/LaunchDaemons/$CORE.plist
-RELAY_PLIST=/var/jb/Library/LaunchDaemons/$RELAY.plist
-CORE_URL=http://127.0.0.1:4097/api/info
-RELAY_URL=http://127.0.0.1:4096/api/info
 CONFIG=/var/mobile/.config/opencode-ios/settings.conf
 FLAG_DIR=/var/mobile/.config/opencode-ios
 CORE_FLAG=$FLAG_DIR/server.enabled
@@ -32,6 +31,8 @@ RELAY_FLAG=$FLAG_DIR/relay.enabled
 MANUAL_LOCK=$FLAG_DIR/manual.lock
 LOG=/var/mobile/Library/Logs/OpenCode/watchdog.log
 STATE=/private/var/tmp/opencode/watchdog.state
+UPDATE_STATE=/private/var/tmp/opencode/update.state
+UPDATE_INTERVAL=86400
 
 # A busy server can block its event loop for several seconds while it decodes a
 # large session row or finishes a major GC. Killing it at that point aborts
@@ -53,6 +54,22 @@ fi
 
 log() {
   echo "[$($DATE -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$LOG"
+}
+
+configured_port() {
+  port=4096
+  if [ -r "$CONFIG" ]; then
+    while IFS='=' read -r key value; do
+      [ "$key" = "PORT" ] && port="$value"
+    done <"$CONFIG"
+  fi
+  case "$port" in ''|*[!0-9]*) port=4096 ;; esac
+  if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
+  echo "$port"
+}
+
+core_url() {
+  echo "http://127.0.0.1:$(configured_port)/api/info"
 }
 
 state_get() {
@@ -93,16 +110,14 @@ auto_start_enabled() {
   return 0
 }
 
-# The server and relay plists use KeepAlive PathState instead of RunAtLoad, so
-# a mobile-user process can stop and start them without privileged launchctl
-# calls. The root watchdog owns creating/removing those flags at boot.
+# The server plist uses KeepAlive PathState instead of RunAtLoad, so a
+# mobile-user process can stop and start it without privileged launchctl
+# calls. The root watchdog owns creating/removing the flag at boot.
 ensure_flags() {
   "$MKDIR" -p "$FLAG_DIR"
-  for flag in "$CORE_FLAG" "$RELAY_FLAG"; do
-    [ -e "$flag" ] || : >"$flag"
-    "$CHOWN" mobile:mobile "$flag" 2>/dev/null || true
-    "$CHMOD" 600 "$flag" 2>/dev/null || true
-  done
+  [ -e "$CORE_FLAG" ] || : >"$CORE_FLAG"
+  "$CHOWN" mobile:mobile "$CORE_FLAG" 2>/dev/null || true
+  "$CHMOD" 600 "$CORE_FLAG" 2>/dev/null || true
 }
 
 clear_flags() {
@@ -110,7 +125,7 @@ clear_flags() {
 }
 
 # The Settings helper holds this lock while it restarts or reconfigures the
-# services so the watchdog does not race it. A stale lock expires after five
+# server so the watchdog does not race it. A stale lock expires after five
 # minutes, or immediately if it contains an invalid timestamp.
 manual_lock_active() {
   [ -r "$MANUAL_LOCK" ] || return 1
@@ -125,11 +140,16 @@ manual_lock_active() {
   return 1
 }
 
+# The network relay used to be a separate launchd job. Remove it (and the older
+# LAN/Tailscale split proxies) permanently so it cannot reappear after a reboot
+# or a reinstall of a stale plist.
 retire_legacy_relays() {
-  for legacy in com.alsinas.opencode-lan-proxy com.alsinas.opencode-tailscale-proxy; do
+  for legacy in com.alsinas.opencode-expose-proxy com.alsinas.opencode-lan-proxy com.alsinas.opencode-tailscale-proxy; do
     "$LAUNCHCTL" bootout "user/501/$legacy" 2>/dev/null || true
     "$RM" -f "/var/jb/Library/LaunchDaemons/$legacy.plist"
   done
+  "$RM" -f /var/jb/usr/lib/opencode-ios/opencode-expose-proxy \
+    "$RELAY_FLAG" "$FLAG_DIR/lan-proxy" 2>/dev/null || true
 }
 
 healthy() {
@@ -271,6 +291,22 @@ act() {
   return 1
 }
 
+# The web title and `opencode-server version` read update.json. Run the check at
+# most once a day; a failed check must never affect supervision.
+check_for_updates() {
+  now=$($DATE +%s)
+  last=0
+  if [ -r "$UPDATE_STATE" ]; then
+    last=$($CAT "$UPDATE_STATE" 2>/dev/null || echo 0)
+  fi
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  if [ $((now - last)) -lt "$UPDATE_INTERVAL" ]; then return 0; fi
+  if [ -x /var/jb/usr/bin/opencode-server ]; then
+    /var/jb/usr/bin/opencode-server check-update --quiet >>"$LOG" 2>&1 || true
+  fi
+  printf '%s\n' "$now" >"$UPDATE_STATE"
+}
+
 retire_legacy_relays
 
 # Without curl every HTTP check would fail and the watchdog would kill a
@@ -282,7 +318,7 @@ if [ ! -x "$CURL" ]; then
 fi
 
 # AUTO_START=0 must win at boot, but a later manual restart from Settings may
-# still run the server for this boot. Clear the flags once at startup, not on
+# still run the server for this boot. Clear the flag once at startup, not on
 # every pass, so a manual restart is not interrupted.
 if ! manual_lock_active; then
   if auto_start_enabled; then
@@ -297,13 +333,10 @@ while :; do
     $SLEEP 2
     continue
   fi
+  check_for_updates
   if auto_start_enabled; then
     ensure_flags
-    if act core "$CORE" "$CORE_PLIST" "$CORE_URL"; then
-      act relay "$RELAY" "$RELAY_PLIST" "$RELAY_URL" || true
-    else
-      log "$CORE is unhealthy; deferring relay check until core recovery"
-    fi
+    act core "$CORE" "$CORE_PLIST" "$(core_url)" || true
   fi
   $SLEEP 10
 done

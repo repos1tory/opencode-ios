@@ -2,24 +2,32 @@
 # OpenCode Server control helper.
 #
 # Everything here runs as the mobile user. Service lifecycle is controlled by
-# launchd KeepAlive PathState flags instead of privileged launchctl bootstrap
-# calls, so the Settings pane no longer needs passwordless sudo.
+# the launchd KeepAlive PathState flag instead of privileged launchctl
+# bootstrap calls, so the Settings pane does not need passwordless sudo.
+#
+# Network exposure is no longer a second process. The server binds 0.0.0.0 and
+# network-gate.cjs reads LAN/TAILSCALE from settings.conf per connection, so
+# the Settings switches apply without restarting the server.
 
 set -e
 
 domain="user/501"
 label="$domain/com.alsinas.opencode-server"
 plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-server.plist"
-proxy_label="$domain/com.alsinas.opencode-expose-proxy"
-proxy_plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-expose-proxy.plist"
+legacy_relay="$domain/com.alsinas.opencode-expose-proxy"
+legacy_lan="$domain/com.alsinas.opencode-lan-proxy"
+legacy_tailscale="$domain/com.alsinas.opencode-tailscale-proxy"
 launchctl="/var/jb/usr/bin/launchctl"
 config="/var/mobile/.config/opencode-ios/settings.conf"
 config_dir="/var/mobile/.config/opencode-ios"
 core_flag="$config_dir/server.enabled"
 relay_flag="$config_dir/relay.enabled"
 manual_lock="$config_dir/manual.lock"
-internal_port=4097
+status_file="$config_dir/network.status"
+gate="/var/jb/usr/lib/opencode-ios/network-gate.cjs"
 import_pending="/var/jb/usr/lib/opencode-ios/import-pending-sessions.sh"
+port_meta="/var/jb/usr/lib/opencode-ios/port.json"
+update_file="/var/mobile/Library/Logs/OpenCode/update.json"
 lock_held=0
 
 acquire_lock() {
@@ -50,6 +58,10 @@ configured_port() {
   case "$port" in ''|*[!0-9]*) port=4096 ;; esac
   if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
   echo "$port"
+}
+
+core_url() {
+  echo "http://127.0.0.1:$(configured_port)/api/info"
 }
 
 refresh_webclip() {
@@ -99,19 +111,7 @@ wait_for_url() {
 }
 
 wait_for_core() {
-  wait_for_url "http://127.0.0.1:$internal_port/api/info" 90 "OpenCode core did not become healthy on 127.0.0.1:$internal_port."
-}
-
-wait_for_relay() {
-  port="$(configured_port)"
-  wait_for_url "http://127.0.0.1:$port/api/info" 60 "The local relay did not return a healthy OpenCode response on port $port."
-}
-
-wait_for_access_interfaces() {
-  if ! /var/jb/usr/lib/opencode-ios/opencode-expose-proxy --check-access; then
-    echo "A selected network-sharing interface is unavailable or cannot accept peers under the current policy." >&2
-    return 1
-  fi
+  wait_for_url "$(core_url)" 90 "OpenCode did not become healthy on 127.0.0.1:$(configured_port)."
 }
 
 set_flag() {
@@ -138,7 +138,7 @@ kill_pid() {
   return 0
 }
 
-# Stop a service and keep it stopped. The flag is cleared first so launchd's
+# Stop the server and keep it stopped. The flag is cleared first so launchd's
 # KeepAlive PathState stops respawning after the process is signalled.
 stop_service() {
   service_label="$1"
@@ -171,49 +171,74 @@ set_config_value() {
   /var/jb/usr/bin/mv -f "$temporary" "$config"
 }
 
+json_string() {
+  key="$1"
+  file="$2"
+  [ -r "$file" ] || return 0
+  /var/jb/usr/bin/sed -n "s/^.*\"${key}\":\"\([^\"]*\)\".*$/\1/p" "$file" |
+    /var/jb/usr/bin/head -n 1
+}
+
+report_access() {
+  lan=0
+  tailscale=0
+  if [ -r "$config" ]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        LAN) lan="$value" ;;
+        TAILSCALE) tailscale="$value" ;;
+      esac
+    done < "$config"
+  fi
+  echo "LAN=${lan:-0} TAILSCALE=${tailscale:-0} PORT=$(configured_port)"
+  if [ -r "$status_file" ]; then
+    echo "Gate: $(/var/jb/usr/bin/cat "$status_file")"
+  fi
+}
+
+# Remove the retired relay jobs and their launchd definitions. The package
+# installer removes the files as root; this covers a manual upgrade where only
+# the user domain is writable.
 retire_legacy_relays() {
-  /var/jb/usr/bin/rm -f "$config_dir/lan-proxy"
+  for legacy in "$legacy_relay" "$legacy_lan" "$legacy_tailscale"; do
+    "$launchctl" bootout "$legacy" 2>/dev/null || true
+  done
+  /var/jb/usr/bin/rm -f "$relay_flag" "$config_dir/lan-proxy" 2>/dev/null || true
 }
 
 start_services() {
+  retire_legacy_relays
   set_flag "$core_flag"
-  set_flag "$relay_flag"
+  if [ ! -r "$gate" ]; then
+    echo "The integrated network gate is missing. Reinstall OpenCode Server." >&2
+    return 1
+  fi
   if ! wait_for_job "$label" 30; then
     echo "OpenCode server job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
     return 1
   fi
-  if ! wait_for_job "$proxy_label" 30; then
-    echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
-    return 1
-  fi
-  if ! healthy "http://127.0.0.1:$internal_port/api/info"; then
+  if ! healthy "$(core_url)"; then
     kill_pid "$(job_pid "$label")"
   fi
   wait_for_core
-  "$import_pending"
-  if ! healthy "http://127.0.0.1:$(configured_port)/api/info"; then
-    kill_pid "$(job_pid "$proxy_label")"
-  fi
-  wait_for_relay
+  if [ -x "$import_pending" ]; then "$import_pending"; fi
   refresh_webclip
 }
 
 case "${1:-status}" in
   start)
     acquire_lock
-    retire_legacy_relays
     start_services
     ;;
   stop)
     acquire_lock
-    stop_service "$proxy_label" "$relay_flag" || true
     stop_service "$label" "$core_flag" || true
     ;;
   restart)
     acquire_lock
+    # The server now owns the public port, so there is no relay to sequence.
     retire_legacy_relays
-    # Stop the relay first so it cannot race the core during recovery.
-    stop_service "$proxy_label" "$relay_flag" || true
+    stop_service "$label" "$core_flag" || true
     set_flag "$core_flag"
     if ! wait_for_job "$label" 30; then
       echo "OpenCode server job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
@@ -221,59 +246,99 @@ case "${1:-status}" in
     fi
     kill_pid "$(job_pid "$label")"
     wait_for_core
-    "$import_pending"
-    set_flag "$relay_flag"
-    if ! wait_for_job "$proxy_label" 30; then
-      echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
-      exit 1
-    fi
-    wait_for_relay
+    if [ -x "$import_pending" ]; then "$import_pending"; fi
     refresh_webclip
     ;;
   exposure)
     acquire_lock
     retire_legacy_relays
-    set_flag "$core_flag"
-    if ! healthy "http://127.0.0.1:$internal_port/api/info"; then
-      if wait_for_job "$label" 30; then
-        kill_pid "$(job_pid "$label")"
+    # The gate reads settings.conf on every connection, so a healthy server
+    # picks up the new switch immediately. Only recover a server that is down.
+    if ! healthy "$(core_url)"; then
+      set_flag "$core_flag"
+      if ! wait_for_job "$label" 30; then
+        echo "OpenCode server job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
+        exit 1
       fi
+      kill_pid "$(job_pid "$label")"
       wait_for_core
     fi
-    stop_service "$proxy_label" "$relay_flag" || true
-    set_flag "$relay_flag"
-    if ! wait_for_job "$proxy_label" 30; then
-      echo "OpenCode relay job is not loaded. Reboot the device or reinstall OpenCode Server." >&2
-      exit 1
-    fi
-    wait_for_relay
-    wait_for_access_interfaces
+    wait_for_core
     ;;
   enable)
     set_config_value AUTO_START 1
     set_flag "$core_flag"
-    set_flag "$relay_flag"
+    clear_flag "$relay_flag"
     ;;
   disable)
     set_config_value AUTO_START 0
-    # Keep currently running processes alive; clearing the flags prevents
-    # launchd from starting them again at boot.
+    # Keep the running process alive; clearing the flag prevents launchd from
+    # starting it again at boot.
     clear_flag "$core_flag"
     clear_flag "$relay_flag"
     ;;
   status)
     "$launchctl" print "$label" 2>/dev/null || true
-    "$launchctl" print "$proxy_label" 2>/dev/null || true
     wait_for_core
-    wait_for_relay
-    wait_for_access_interfaces
-    echo "OpenCode core and relay are responding; configured network interfaces are ready."
+    report_access
     ;;
   check)
     wait_for_core
-    wait_for_relay
-    wait_for_access_interfaces
-    echo "OpenCode core and relay are responding; configured network interfaces are ready."
+    report_access
+    echo "The OpenCode server is responding; network access is enforced per connection."
+    ;;
+  access)
+    report_access
+    ;;
+  version)
+    upstream=$(json_string upstream "$port_meta")
+    commit=$(json_string commit "$port_meta")
+    portrev=$(json_string port "$port_meta")
+    pkg=$(json_string package "$port_meta")
+    printf 'OpenCode %s (iOS port %s, package %s, upstream %s)\n' \
+      "${upstream:-unknown}" "${portrev:-?}" "${pkg:-?}" "${commit:-unknown}"
+    ;;
+  check-update)
+    quiet=0
+    [ "${2:-}" = "--quiet" ] && quiet=1
+    installed=$(json_string upstream "$port_meta")
+    if [ -z "$installed" ]; then
+      echo "Cannot read the installed version from $port_meta" >&2
+      exit 1
+    fi
+    commit=$(json_string commit "$port_meta")
+    response=$(/var/jb/usr/bin/curl -fsS --connect-timeout 5 --max-time 20 \
+      "https://opencode.ai/update/api/latest/cli/npm?current=${installed}" 2>/dev/null) || {
+      [ "$quiet" = 1 ] || echo "Update check failed (network unavailable)." >&2
+      exit 1
+    }
+    latest=$(printf '%s' "$response" |
+      /var/jb/usr/bin/sed -n 's/^.*"version":"\([^"]*\)".*$/\1/p' |
+      /var/jb/usr/bin/head -n 1)
+    if [ -z "$latest" ]; then
+      [ "$quiet" = 1 ] || echo "Update check returned no version." >&2
+      exit 1
+    fi
+    update=false
+    if [ "$latest" != "$installed" ]; then
+      newest=$(printf '%s\n%s\n' "$installed" "$latest" |
+        /var/jb/usr/bin/sort -V | /var/jb/usr/bin/tail -n 1)
+      [ "$newest" = "$latest" ] && update=true
+    fi
+    /var/jb/usr/bin/mkdir -p /var/mobile/Library/Logs/OpenCode
+    temporary="$update_file.$$"
+    printf '{"checked":%s,"installed":"%s","latest":"%s","update":%s,"commit":"%s"}\n' \
+      "$(/var/jb/usr/bin/date +%s)" "$installed" "$latest" "$update" "$commit" >"$temporary"
+    /var/jb/usr/bin/chown mobile:mobile "$temporary" 2>/dev/null || true
+    /var/jb/usr/bin/chmod 644 "$temporary"
+    /var/jb/usr/bin/mv -f "$temporary" "$update_file"
+    if [ "$quiet" = 0 ]; then
+      if [ "$update" = true ]; then
+        echo "OpenCode $latest is available (installed $installed)."
+      else
+        echo "OpenCode $installed is up to date."
+      fi
+    fi
     ;;
   url)
     echo "http://127.0.0.1:$(configured_port)/"
@@ -281,10 +346,10 @@ case "${1:-status}" in
   logs)
     exec /var/jb/usr/bin/tail -f /var/mobile/Library/Logs/OpenCode/server.log \
       /var/mobile/Library/Logs/OpenCode/server.err.log \
-      /var/mobile/Library/Logs/OpenCode/expose.err.log
+      /var/mobile/Library/Logs/OpenCode/network.log
     ;;
   *)
-    echo "Usage: opencode-server {start|stop|restart|exposure|enable|disable|status|check|url|logs}" >&2
+    echo "Usage: opencode-server {start|stop|restart|exposure|enable|disable|status|check|access|version|check-update|url|logs}" >&2
     exit 2
     ;;
 esac

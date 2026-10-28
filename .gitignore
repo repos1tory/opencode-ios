@@ -12,3 +12,11 @@ base/
 
 # Upstream build scratch
 build/upgrade/
+
+# Downloaded official bundle and build scratch
+vendor/
+
+# Transient CI download / test scratch
+build/fetch-*/
+build/vendor-download*/
+build/test-*/

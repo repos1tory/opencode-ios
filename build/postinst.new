@@ -21,20 +21,11 @@ chmod 700 /var/mobile/.config/opencode-ios
 launchctl="/var/jb/usr/bin/launchctl"
 domain="user/501"
 plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-server.plist"
-proxy_plist="/var/jb/Library/LaunchDaemons/com.alsinas.opencode-expose-proxy.plist"
 label="$domain/com.alsinas.opencode-server"
-proxy_label="$domain/com.alsinas.opencode-expose-proxy"
-legacy_lan_label="$domain/com.alsinas.opencode-lan-proxy"
-legacy_tailscale_label="$domain/com.alsinas.opencode-tailscale-proxy"
 
-# Keep every already-loaded server or relay alive through package installation.
+# The server now owns the public port. Always stop the old core and proxy
+# and activate the new server during the upgrade.
 defer_activation=0
-if "$launchctl" print "$label" >/dev/null 2>&1 || \
-   "$launchctl" print "$proxy_label" >/dev/null 2>&1 || \
-   "$launchctl" print "$legacy_lan_label" >/dev/null 2>&1 || \
-   "$launchctl" print "$legacy_tailscale_label" >/dev/null 2>&1; then
-  defer_activation=1
-fi
 
 # Older packages used LAN=1 plus a shared Basic Auth password and did not have
 # a TAILSCALE setting. Keep those installs private until the user enables a
@@ -91,7 +82,6 @@ start_service() {
 
 case "$port" in ''|*[!0-9]*) port=4096 ;; esac
 if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then port=4096; fi
-server_port=4097
 
 # OpenCode has one canonical home. If an older package created its database
 # under /var/mobile, export those sessions through the API before stopping it,
@@ -196,34 +186,28 @@ if [ "$defer_activation" = "0" ]; then
   /var/jb/usr/bin/rm -f /var/mobile/.config/opencode-ios/lan-proxy
 fi
 
-# The watchdog and this script verify startup with curl. Fail loudly instead of
-# leaving a running package that can never pass a health check.
-if [ ! -x /var/jb/usr/bin/curl ]; then
-  echo "OpenCode Server requires curl. Install the curl package and try again." >&2
-  exit 1
-fi
-
-# The core and relay use KeepAlive PathState flags instead of RunAtLoad so
-# that the mobile user can stop/start them from Settings without sudo.
+# The server uses a KeepAlive PathState flag instead of RunAtLoad so that the
+# mobile user can stop/start it from Settings without sudo. LAN and Tailscale
+# exposure are enforced inside the server by network-gate.cjs; there is no
+# second relay process and no relay flag.
 config_dir=/var/mobile/.config/opencode-ios
 core_flag="$config_dir/server.enabled"
 relay_flag="$config_dir/relay.enabled"
 if [ "$auto_start" = "1" ]; then
   : >"$core_flag"
-  : >"$relay_flag"
-  /var/jb/usr/bin/chown mobile:mobile "$core_flag" "$relay_flag"
-  /var/jb/usr/bin/chmod 600 "$core_flag" "$relay_flag"
+  /var/jb/usr/bin/chown mobile:mobile "$core_flag"
+  /var/jb/usr/bin/chmod 600 "$core_flag"
 else
-  /var/jb/usr/bin/rm -f "$core_flag" "$relay_flag"
+  /var/jb/usr/bin/rm -f "$core_flag"
 fi
+/var/jb/usr/bin/rm -f "$relay_flag"
 
 /var/jb/usr/bin/chmod 755 /var/jb/Library/LaunchDaemons
 /var/jb/usr/bin/chmod 644 "$plist"
-/var/jb/usr/bin/chmod 644 "$proxy_plist"
 if [ "$defer_activation" = "1" ]; then
-  echo "OpenCode update installed. The running server and relay were left unchanged; press Restart Server in Settings when ready to activate the update."
+  echo "OpenCode update installed. Press Restart Server in Settings if the server did not start."
 else
-  stop_service "$proxy_label"
+  "$launchctl" bootout "$domain/com.alsinas.opencode-expose-proxy" 2>/dev/null || true
   stop_service "$label"
 
   auto_start=1
@@ -234,24 +218,9 @@ else
   fi
   if [ "$auto_start" = "1" ]; then
     "$launchctl" enable "$label" 2>/dev/null || true
-    "$launchctl" enable "$proxy_label" 2>/dev/null || true
     start_service "$label" "$plist"
     attempt=0
     while [ "$attempt" -lt 90 ]; do
-      if /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 \
-        "http://127.0.0.1:$server_port/api/info" >/dev/null 2>&1; then
-        break
-      fi
-      /var/jb/usr/bin/sleep 1
-      attempt=$((attempt + 1))
-    done
-    if [ "$attempt" -ge 90 ]; then
-      echo "OpenCode core did not start on its private loopback port $server_port." >&2
-      exit 1
-    fi
-    start_service "$proxy_label" "$proxy_plist"
-    attempt=0
-    while [ "$attempt" -lt 30 ]; do
       if /var/jb/usr/bin/curl -fsS --connect-timeout 1 --max-time 2 \
         "http://127.0.0.1:$port/api/info" >/dev/null 2>&1; then
         break
@@ -259,19 +228,30 @@ else
       /var/jb/usr/bin/sleep 1
       attempt=$((attempt + 1))
     done
-    if [ "$attempt" -ge 30 ]; then
-      echo "The OpenCode network relay did not become healthy on port $port." >&2
+    if [ "$attempt" -ge 90 ]; then
+      echo "OpenCode did not start on port $port." >&2
       exit 1
     fi
     "$importer"
   else
     "$launchctl" disable "$label" 2>/dev/null || true
-    "$launchctl" disable "$proxy_label" 2>/dev/null || true
   fi
 fi
 /var/jb/usr/lib/opencode-ios/install-webclip.sh
 /var/jb/usr/bin/uicache -p /var/jb/Applications/OpenCode.app 2>/dev/null || true
 /var/jb/usr/bin/uicache -r 2>/dev/null || true
+# The separate exposure proxy is gone. Remove its job, plist, and binary even
+# when it was still loaded during the upgrade, so it cannot keep port 4096 or
+# reappear at the next boot.
+relay_domain=user/501
+for relay_name in com.alsinas.opencode-expose-proxy com.alsinas.opencode-lan-proxy com.alsinas.opencode-tailscale-proxy; do
+  "$launchctl" bootout "$relay_domain/$relay_name" 2>/dev/null || true
+  /var/jb/usr/bin/rm -f "/var/jb/Library/LaunchDaemons/$relay_name.plist"
+done
+/var/jb/usr/bin/rm -f /var/jb/usr/lib/opencode-ios/opencode-expose-proxy \
+  /var/mobile/.config/opencode-ios/relay.enabled \
+  /var/mobile/.config/opencode-ios/lan-proxy
+
 # Load the periodic supervisor after the server package's normal setup. It
 # remains loaded even when AUTO_START is off; watchdog.sh reads settings.conf
 # and stays idle until the user enables the server again.

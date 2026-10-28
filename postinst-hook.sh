@@ -1,3 +1,15 @@
+# The separate exposure proxy is gone. Remove its job, plist, and binary even
+# when it was still loaded during the upgrade, so it cannot keep port 4096 or
+# reappear at the next boot.
+relay_domain=user/501
+for relay_name in com.alsinas.opencode-expose-proxy com.alsinas.opencode-lan-proxy com.alsinas.opencode-tailscale-proxy; do
+  "$launchctl" bootout "$relay_domain/$relay_name" 2>/dev/null || true
+  /var/jb/usr/bin/rm -f "/var/jb/Library/LaunchDaemons/$relay_name.plist"
+done
+/var/jb/usr/bin/rm -f /var/jb/usr/lib/opencode-ios/opencode-expose-proxy \
+  /var/mobile/.config/opencode-ios/relay.enabled \
+  /var/mobile/.config/opencode-ios/lan-proxy
+
 # Load the periodic supervisor after the server package's normal setup. It
 # remains loaded even when AUTO_START is off; watchdog.sh reads settings.conf
 # and stays idle until the user enables the server again.
