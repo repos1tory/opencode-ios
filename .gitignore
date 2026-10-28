@@ -20,3 +20,6 @@ vendor/
 build/fetch-*/
 build/vendor-download*/
 build/test-*/
+
+# Generated control copy
+build/control.new
