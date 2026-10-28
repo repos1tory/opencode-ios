@@ -1,0 +1,67 @@
+name: Build upstream bundle
+
+on:
+  push:
+    branches: ["upgrade/**"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream OpenCode version
+        required: true
+        default: "2.2.0"
+      commit:
+        description: Upstream git commit
+        required: true
+        default: "f993a89d13c73ff6f6537d6b97e78e138a3ea363"
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UPSTREAM_VERSION: ${{ inputs.version || '2.2.0' }}
+      UPSTREAM_COMMIT: ${{ inputs.commit || 'f993a89d13c73ff6f6537d6b97e78e138a3ea363' }}
+    steps:
+      - name: Checkout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: anomalyco/opencode
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: bun install --frozen-lockfile --os=* --cpu=*
+
+      - name: Build node bundle
+        working-directory: upstream
+        env:
+          OPENCODE_CHANNEL: latest
+          OPENCODE_VERSION: ${{ env.UPSTREAM_VERSION }}
+        run: bun packages/cli/script/build-node.ts --bundle-only --target=darwin-arm64 --skip-install
+
+      - name: Write checksums and manifest
+        working-directory: upstream/packages/cli/dist-node
+        run: |
+          sha256sum opencode.mjs > SHA256SUMS
+          node -e "require('fs').writeFileSync('bundle.json', JSON.stringify({version: process.env.UPSTREAM_VERSION, commit: process.env.UPSTREAM_COMMIT, channel: 'latest', target: 'darwin-arm64', built: new Date().toISOString()}, null, 2))"
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-${{ env.UPSTREAM_VERSION }}-darwin-arm64
+          if-no-files-found: error
+          path: |
+            upstream/packages/cli/dist-node/opencode.mjs
+            upstream/packages/cli/dist-node/assets
+            upstream/packages/cli/dist-node/SHA256SUMS
+            upstream/packages/cli/dist-node/bundle.json

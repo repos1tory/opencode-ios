@@ -9,3 +9,6 @@ previous/
 
 # Package copies superseded by the current build
 base/
+
+# Upstream build scratch
+build/upgrade/
