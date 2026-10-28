@@ -47,14 +47,14 @@ index bd36528..38a6eb0 100644
 @@ -1,13 +1,15 @@
 +const runtimePlatform: string = process.platform
  export * as CpuProfile from "./cpu-profile"
-
+ 
  import { Global } from "@opencode/util/global"
  import { Effect, FileSystem, Queue } from "effect"
 -import { Session } from "node:inspector"
 +import type { Session } from "node:inspector"
 +import { writeFile } from "node:fs/promises"
  import path from "node:path"
-
+ 
  export const listen = Effect.gen(function* () {
    const global = yield* Global.Service
 -  if (process.platform === "win32") return
@@ -88,18 +88,40 @@ index dc4f43e..d5b9a1e 100644
 @@ -1,4 +1,4 @@
 -const platforms = ["darwin", "linux", "win32"] as const
 +const platforms = ["darwin", "linux", "win32", "ios"] as const
-
+ 
  export type NodeTarget = ReturnType<typeof nodeTarget>
-
+ 
 @@ -13,7 +13,7 @@ export function nodeTarget(platform: string, arch: string) {
    const parcelWatcherPackage = `@parcel/watcher-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-glibc" : ""}`
    const fffPackage = `@ff-labs/fff-bin-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-gnu" : ""}`
    const fffFfiPackage = `@yuuang/ffi-rs-${targetPlatform}-${targetArch}${targetPlatform === "linux" ? "-gnu" : targetPlatform === "win32" ? "-msvc" : ""}`
 -  const opencodePtyAsset = targetPlatform === "win32" ? "opencode-pty/opencode-pty.exe" : "opencode-pty/opencode-pty"
 +  const opencodePtyAsset = targetPlatform === "ios" ? undefined : targetPlatform === "win32" ? "opencode-pty/opencode-pty.exe" : "opencode-pty/opencode-pty"
-
+ 
    return {
      platform: targetPlatform,
+diff --git a/packages/cli/src/util/process.ts b/packages/cli/src/util/process.ts
+index 4721a12..f7ea43d 100644
+--- a/packages/cli/src/util/process.ts
++++ b/packages/cli/src/util/process.ts
+@@ -11,7 +11,9 @@ export function selfCommand() {
+ }
+ 
+ function nodeFlags() {
+-  return process.execArgv.flatMap((arg, index, args) => {
++  const runtimePlatform: string = process.platform
++  const required = runtimePlatform === "ios" ? ["--predictable", "--single-threaded", "--disable-wasm-trap-handler"] : []
++  return [...required, ...process.execArgv.flatMap((arg, index, args) => {
+     if (index > 0 && args[index - 1] === "--conditions") return []
+     if (arg === "--conditions") return args[index + 1] ? [arg, args[index + 1]] : []
+     if (arg.startsWith("--conditions=")) return [arg]
+@@ -24,5 +26,5 @@ function nodeFlags() {
+       return [arg]
+     if (arg === "--no-warnings" || arg.startsWith("--disable-warning=")) return [arg]
+     return []
+-  })
++  })]
+ }
 diff --git a/packages/cli/vite.node.config.ts b/packages/cli/vite.node.config.ts
 index 18ddd2a..3a2024d 100644
 --- a/packages/cli/vite.node.config.ts
@@ -132,7 +154,7 @@ index ae359e3..53cc1ca 100644
 @@ -1,3 +1,4 @@
 +const runtimePlatform: string = process.platform
  export * as Watcher from "./watcher.js"
-
+ 
  // @ts-ignore
 @@ -225,6 +226,19 @@ export const nativeLayer = Layer.succeed(
            ),
@@ -162,7 +184,7 @@ index ef758ad..336d660 100644
 -export const available = true
 +const runtimePlatform: string = process.platform
 +export const available = runtimePlatform !== "ios"
-
+ 
  export async function resolveBinary() {
    return process.env.OPENCODE_PTY_BIN || "opencode-pty"
 diff --git a/packages/core/src/pty/pty.ios.ts b/packages/core/src/pty/pty.ios.ts
@@ -238,14 +260,14 @@ index 9545edf..c577b85 100644
 +import { IosPty } from "./pty.ios"
  import type { spawn } from "@lydell/node-pty"
  import type { Opts, Proc } from "./pty.js"
-
+ 
  export type { Disp, Exit, Opts, Proc } from "./pty.js"
-
+ 
 -const pty = createRequire(import.meta.url)(process.env.OPENCODE_NODE_PTY_PATH ?? "@lydell/node-pty") as {
 +const pty = runtimePlatform === "ios" ? undefined : createRequire(import.meta.url)(process.env.OPENCODE_NODE_PTY_PATH ?? "@lydell/node-pty") as {
    spawn: typeof spawn
  }
-
+ 
  function spawnPty(file: string, args: string[], opts: Opts): Proc {
 -  const proc = pty.spawn(file, args, process.platform === "win32" && isSea() ? { ...opts, useConptyDll: true } : opts)
 +  if (runtimePlatform === "ios") return IosPty.open(file, args, opts)
