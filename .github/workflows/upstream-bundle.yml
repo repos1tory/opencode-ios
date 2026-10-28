@@ -47,7 +47,8 @@ jobs:
         env:
           OPENCODE_CHANNEL: latest
           OPENCODE_VERSION: ${{ env.UPSTREAM_VERSION }}
-        run: bun packages/cli/script/build-node.ts --bundle-only --target=darwin-arm64 --skip-install
+          OPENCODE_TARGET: darwin-arm64
+        run: bun packages/cli/script/build-node.ts --bundle-only --skip-install
 
       - name: Write checksums and manifest
         working-directory: upstream/packages/cli/dist-node
