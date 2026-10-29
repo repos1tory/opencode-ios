@@ -35,16 +35,16 @@ contains the official web UI and server bundle.
 
 1. Add **https://repos1tory.github.io/** as a source.
 2. Install **OpenCode Server (iOS)**.
-3. Open **Settings → General → OpenCode Server** on iOS 18 or later (on older iOS versions, look for **OpenCode Server** on the main Settings screen), then tap **Start**.
+3. Open **Settings → General → OpenCode Server** on iOS 18 or later (on older iOS versions, look for **OpenCode Server** on the main Settings screen), then switch **OpenCode Server** on.
 
 ### Direct .deb
 
-[Download Node.js 22.19.0-3](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios2/nodejs_22.19.0-3_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios8](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios8/opencode-server-2.2.0-ios8_iphoneos-arm64.deb).
+[Download Node.js 22.19.0-3](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios2/nodejs_22.19.0-3_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios9](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios9/opencode-server-2.2.0-ios9_iphoneos-arm64.deb).
 Install Node.js first when using `dpkg` directly; Sileo and Zebra resolve it automatically.
 
 ```sh
 sudo /var/jb/usr/bin/dpkg -i nodejs_22.19.0-3_iphoneos-arm64.deb
-sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios7_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios9_iphoneos-arm64.deb
 ```
 
 The package starts automatically by default. Set `AUTO_START=0` in
@@ -101,15 +101,17 @@ opencode-server access          # LAN/Tailscale state and gate
 opencode-server logs
 ```
 
-The Settings pane exposes the same controls: **Start**, **Stop**, **Restart**,
-**Check**, **LAN**, and **Tailscale**.
+The Settings pane has a live **OpenCode Server** switch, a current server status
+that refreshes automatically every five seconds, and a **Restart Server**
+action. The switch shows a spinner while starting or stopping. **LAN** and
+**Tailscale** access remain separately controlled.
 
 ## Versions and updates
 
 The package version is `<upstream>-ios<port>`:
 
 ```
-OpenCode 2.2.0  →  package 2.2.0-ios7
+OpenCode 2.2.0  →  package 2.2.0-ios9
 ```
 
 - `/api/info` reports the **upstream** version.
