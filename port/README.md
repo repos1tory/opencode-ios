@@ -20,7 +20,7 @@ patches here.
 ## Versioning
 
 - `VERSION` pins the upstream release and commit.
-- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios4`).
+- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios5`).
 - The server reports the **upstream** version at `/api/info`.
 - `/_ios/port.json` reports upstream, commit, port revision, and update state.
 
