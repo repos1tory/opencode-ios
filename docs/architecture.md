@@ -42,10 +42,10 @@ The installed package depends on the shared `nodejs` Debian package for runtime.
 ```
 UPSTREAM_VERSION=2.2.0
 UPSTREAM_COMMIT=f993a89d13c73ff6f6537d6b97e78e138a3ea363
-PORT_REVISION=9
+PORT_REVISION=10
 ```
 
-- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios9`).
+- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios10`).
 - `/api/info` reports the upstream version.
 - `/_ios/port.json` reports upstream, commit, port revision, package, and update
   state.

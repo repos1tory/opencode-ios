@@ -99,14 +99,17 @@ fi
 
 echo "[server.sh] starting node pid=$$ heap=${HEAP_MB}MB host=$HOST port=$PORT $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG" 2>/dev/null || true
 
-# Keep WebAssembly's baseline compiler, but avoid optimizer/code-GC churn.
-# On-device, servers with larger existing session stores SIGBUS during V8's
-# WebAssembly code-space reclamation; these flags let the same DB boot and
-# serve sessions while preserving WebAssembly support.
+# Keep WebAssembly on its baseline compiler, but allow V8 to reclaim compiled
+# code. Disabling code GC made larger iOS sessions start reliably, then caused
+# the Wasm code space to grow until Node aborted with an allocation OOM. The
+# trap handler also reserves a large virtual-memory cage; use bounds checks on
+# iOS instead, where that reservation and executable-memory pressure are less
+# predictable.
 exec "$NODE" \
   --max-old-space-size="$HEAP_MB" \
   --no-wasm-tier-up \
   --no-wasm-dynamic-tiering \
-  --no-wasm-code-gc \
+  --wasm-code-gc \
+  --disable-wasm-trap-handler \
   --require "$GATE" \
   "$ENTRY" serve --hostname "$HOST" --port "$PORT"
