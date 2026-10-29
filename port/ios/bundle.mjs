@@ -41,9 +41,9 @@ function replaceRegexOnce(pattern, to, label) {
   source = source.replace(pattern, () => to);
 }
 
-// 1. iOS Node flags. These are the flags the port has always used: deterministic
-// execution, one thread, and no WASM trap handler on the constrained runtime.
-replaceRegexOnce(/^#![^\n]*\n/g, "#!/usr/bin/env -S node --predictable --single-threaded --disable-wasm-trap-handler\n", "shebang");
+// 1. Use the shared rootless Node wrapper. It owns the required V8 flags, and
+// the explicit path avoids relying on launchd's PATH or /usr/bin/env -S.
+replaceRegexOnce(/^#![^\n]*\n/g, "#!/var/jb/usr/bin/node\n", "shebang");
 
 // 2. getAssetKeys was added after Node 22. The non-SEA path never calls it, so
 // a static no-op keeps the ESM import graph valid.

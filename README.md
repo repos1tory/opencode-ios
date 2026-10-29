@@ -23,10 +23,11 @@ from the device itself, your LAN, or Tailscale.
 | Firmware | iOS 15 or newer |
 | Architecture | `iphoneos-arm64` (rootless) |
 | Package manager | Sileo or Zebra |
-| Dependencies | `preferenceloader`, `curl`, `lsof` |
+| Dependencies | `nodejs (>= 22.19.0-2)`, `preferenceloader`, `curl`, `lsof` |
 
-The package bundles its own Node runtime and the official web UI. You do not
-need to install Node, Bun, or OpenCode separately.
+Sileo installs the compatible Node.js runtime automatically as a required
+dependency. OpenCode uses the shared rootless Node wrapper, and the package
+contains the official web UI and server bundle.
 
 ## Install
 
@@ -38,11 +39,11 @@ need to install Node, Bun, or OpenCode separately.
 
 ### Direct .deb
 
-[Download 2.2.0-ios2](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios2/opencode-server-2.2.0-ios2_iphoneos-arm64.deb)
+[Download 2.2.0-ios4](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios4/opencode-server-2.2.0-ios4_iphoneos-arm64.deb)
 or install manually:
 
 ```sh
-sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios2_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios4_iphoneos-arm64.deb
 ```
 
 The package starts automatically by default. Set `AUTO_START=0` in
@@ -107,7 +108,7 @@ The Settings pane exposes the same controls: **Start**, **Stop**, **Restart**,
 The package version is `<upstream>-ios<port>`:
 
 ```
-OpenCode 2.2.0  →  package 2.2.0-ios2
+OpenCode 2.2.0  →  package 2.2.0-ios4
 ```
 
 - `/api/info` reports the **upstream** version.

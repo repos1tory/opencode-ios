@@ -11,6 +11,7 @@
 set -e
 
 export HOME="/var/jb/var/mobile"
+export PATH="/var/jb/usr/bin:/var/jb/usr/sbin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_DATA_HOME="$HOME/.local/share"
@@ -35,7 +36,7 @@ else
   echo "[server.sh] /var/mobile/OpenCode missing; staying in $HOME" >>"$HOME/.local/share/opencode/log/startup.log" 2>/dev/null || true
 fi
 
-NODE="/var/jb/usr/lib/opencode-ios/node"
+NODE="/var/jb/usr/bin/node"
 ENTRY="/var/jb/usr/lib/opencode-ios/opencode.mjs"
 GATE="/var/jb/usr/lib/opencode-ios/network-gate.cjs"
 CONFIG="/var/mobile/.config/opencode-ios/settings.conf"
@@ -99,9 +100,6 @@ fi
 echo "[server.sh] starting node pid=$$ heap=${HEAP_MB}MB host=$HOST port=$PORT $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG" 2>/dev/null || true
 
 exec "$NODE" \
-  --predictable \
-  --single-threaded \
-  --disable-wasm-trap-handler \
   --max-old-space-size="$HEAP_MB" \
   --require "$GATE" \
   "$ENTRY" serve --hostname "$HOST" --port "$PORT"

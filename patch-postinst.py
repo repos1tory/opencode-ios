@@ -73,6 +73,19 @@ defer_activation=0
         'echo "OpenCode update installed. The running server and relay were left unchanged; press Restart Server in Settings when ready to activate the update."',
         'echo "OpenCode update installed. Press Restart Server in Settings if the server did not start."',
     ),
+    # The base package's session migration also needs the shared Node runtime.
+    ('node="/var/jb/usr/lib/opencode-ios/node"\n', 'node="/var/jb/usr/bin/node"\n'),
+    (
+        'if ! "$node" --predictable --single-threaded --disable-wasm-trap-handler "$helper" export "$source_url" "$pending"; then',
+        'if ! "$node" "$helper" export "$source_url" "$pending"; then',
+    ),
+    (
+        '''    <string>/var/jb/usr/lib/opencode-ios/node</string>
+    <string>--predictable</string><string>--single-threaded</string><string>--disable-wasm-trap-handler</string>
+    <string>/var/jb/usr/lib/opencode-ios/opencode.mjs</string>''',
+        '''    <string>/var/jb/usr/bin/node</string>
+    <string>/var/jb/usr/lib/opencode-ios/opencode.mjs</string>''',
+    ),
 ]
 
 
@@ -99,6 +112,9 @@ def main() -> int:
         return 1
     if "server_port" in text:
         print("postinst still references the retired loopback port", file=sys.stderr)
+        return 1
+    if "/var/jb/usr/lib/opencode-ios/node" in text:
+        print("postinst still references the removed private Node runtime", file=sys.stderr)
         return 1
 
     path.write_text(text)

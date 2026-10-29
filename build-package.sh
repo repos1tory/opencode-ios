@@ -11,9 +11,9 @@ STAGE="$BUILD/stage"
 PKG_VERSION="${UPSTREAM_VERSION}-ios${PORT_REVISION}"
 PACKAGE="$BUILD/opencode-server-${PKG_VERSION}_iphoneos-arm64.deb"
 
-# The base package supplies the iOS scaffolding (Node binary, Settings bundle,
-# launchd plists) and is independent of the upstream OpenCode version. The
-# vendor directory supplies the official JavaScript bundle and assets.
+# The base package supplies the iOS scaffolding and a build-only Node bootstrap.
+# The published package depends on nodejs for its runtime. The vendor directory
+# supplies the official JavaScript bundle and assets.
 BASE="${BASE_DEB:-$ROOT/base/opencode-server-template.deb}"
 if [ ! -r "$BASE" ]; then
   BASE=$(ls -1 "$ROOT"/base/*.deb 2>/dev/null | "$BIN/tail" -n 1 || true)
@@ -204,6 +204,10 @@ chmod 644 "$STAGE/DEBIAN/control" \
 
 # Vendor assets may inherit a restrictive build umask; the server runs as mobile.
 chmod -R a+rX "$STAGE/var/jb/usr/lib/opencode-ios/assets"
+
+# The build-only Node from the base template has already run every patcher.
+# At runtime server.sh uses the nodejs package's /var/jb/usr/bin/node wrapper.
+rm -f "$STAGE/var/jb/usr/lib/opencode-ios/node"
 
 # Installed-Size must describe this build, not the base package.
 set -- $("$BIN/du" -sk "$STAGE")
