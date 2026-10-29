@@ -18,7 +18,7 @@ Official OpenCode 2.2.0 (unmodified)
 └─ assets/*                  macOS natives removed, PTY stub added
 
 iOS wrapper (outside upstream logic)
-├─ server.sh                 binds 0.0.0.0, sets env, starts Node
+├─ server.sh                 binds 0.0.0.0, sets env, starts shared Node wrapper
 ├─ network-gate.cjs          Node preload; per-connection access control
 ├─ launchd plists            server + watchdog jobs
 ├─ watchdog.sh               health checks and recovery
@@ -32,7 +32,8 @@ Package layer
 ```
 
 The upstream payload comes from `vendor/opencode-<version>/`; the base package
-supplies the Node binary, Settings bundle, and launchd plists.
+supplies a build-only Node bootstrap, the Settings bundle, and launchd plists.
+The installed package depends on the shared `nodejs` Debian package for runtime.
 
 ## Version pin
 
@@ -41,10 +42,10 @@ supplies the Node binary, Settings bundle, and launchd plists.
 ```
 UPSTREAM_VERSION=2.2.0
 UPSTREAM_COMMIT=f993a89d13c73ff6f6537d6b97e78e138a3ea363
-PORT_REVISION=2
+PORT_REVISION=4
 ```
 
-- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios2`).
+- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios4`).
 - `/api/info` reports the upstream version.
 - `/_ios/port.json` reports upstream, commit, port revision, package, and update
   state.
@@ -70,7 +71,7 @@ SHA-256 manifest, and stages it under `vendor/opencode-<version>/`.
 
 `build-package.sh`:
 
-1. Extract the base package (Node binary, Settings bundle, plists).
+1. Extract the base package (build-only Node, Settings bundle, plists).
 2. Replace `opencode.mjs` and `assets/` with the vendor bundle.
 3. Remove macOS native addons/helpers; add `assets/ios/pty-stub.cjs`.
 4. Generate `port.json`.
@@ -81,8 +82,9 @@ SHA-256 manifest, and stages it under `vendor/opencode-<version>/`.
 9. Apply `patch-assets.mjs` (session-sync retry, cache-busting rename).
 10. Apply `patch-ui.mjs` (title widget, service-worker re-hash).
 11. Apply `patch-server.mjs` (restart continuity, same-device OAuth text).
-12. `chmod -R a+rX` the vendored assets; the server runs as `mobile`.
-13. Write the version into `control`, patch `postinst`/`prerm`, and build the
+12. Remove the build-only Node binary; installed server uses the `nodejs` dependency.
+13. `chmod -R a+rX` the vendored assets; the server runs as `mobile`.
+14. Write the version into `control`, patch `postinst`/`prerm`, and build the
     `.deb` with `dpkg-deb --root-owner-group`.
 
 Every patch requires exactly one match and exits non-zero otherwise.
@@ -93,7 +95,7 @@ Every patch requires exactly one match and exits non-zero otherwise.
 
 | Change | Reason |
 | --- | --- |
-| Shebang → `--predictable --single-threaded --disable-wasm-trap-handler` | Flags supported by the iOS Node build. |
+| Shebang → `/var/jb/usr/bin/node` | Uses the shared package wrapper, which supplies the required V8 flags. |
 | Stub `node:sea.getAssetKeys` | Absent from Node 22; the non-SEA path never calls it. |
 | Stub `node:inspector` | The jailbroken Node has no inspector; profiling is the only consumer. |
 | `OPENCODE_NODE_PTY_PATH` → `assets/ios/pty-stub.cjs` | The macOS `node-pty` addon cannot load. |

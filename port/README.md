@@ -10,7 +10,7 @@ patches here.
 | Layer | What it does |
 | --- | --- |
 | `upstream/` (workflow) | Builds `opencode.mjs` + `assets/` from the official tag in CI, for `darwin-arm64`. |
-| `port/ios/bundle.mjs` | Makes the official bundle run on the jailbroken Node 22 build (SEA import, inspector, shebang, PTY). |
+| `port/ios/bundle.mjs` | Makes the official bundle run on the shared jailbroken Node 22 runtime (SEA import, inspector, shebang, PTY). |
 | `port/ios/endpoints.mjs` | Adds `/_ios/battery.json` and `/_ios/port.json` to the web asset loader. |
 | `port/ios/pty-stub.cjs` | Stand-in for the macOS `node-pty` native addon. |
 | `patch-server.mjs` | Restart continuity + same-device OAuth text. |
@@ -20,7 +20,7 @@ patches here.
 ## Versioning
 
 - `VERSION` pins the upstream release and commit.
-- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios2`).
+- The Debian package version is `<upstream>-ios<port>` (for example `2.2.0-ios4`).
 - The server reports the **upstream** version at `/api/info`.
 - `/_ios/port.json` reports upstream, commit, port revision, and update state.
 
