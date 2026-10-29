@@ -6,6 +6,7 @@
     <string>com.alsinas.opencode-server</string>
     <key>ProgramArguments</key>
     <array>
+      <string>/var/jb/bin/sh</string>
       <string>/var/jb/usr/lib/opencode-ios/server.sh</string>
     </array>
     <key>UserName</key>
