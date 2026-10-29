@@ -27,12 +27,12 @@ iOS wrapper (outside upstream logic)
 
 Package layer
 ├─ control, postinst, prerm
-├─ Settings bundle patch     our compiled prefs binary, re-signed
+├─ Settings bundle           source-built arm64 and arm64e controller
 └─ battery helper            our C binary, IOPowerSources
 ```
 
 The upstream payload comes from `vendor/opencode-<version>/`; the base package
-supplies a build-only Node bootstrap, the Settings bundle, and launchd plists.
+supplies a build-only Node bootstrap, Settings resources, and launchd plists.
 The installed package depends on the shared `nodejs` Debian package for runtime.
 
 ## Version pin
@@ -45,7 +45,7 @@ UPSTREAM_COMMIT=f993a89d13c73ff6f6537d6b97e78e138a3ea363
 PORT_REVISION=5
 ```
 
-- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios5`).
+- Package version: `<upstream>-ios<port>` (currently `2.2.0-ios6`).
 - `/api/info` reports the upstream version.
 - `/_ios/port.json` reports upstream, commit, port revision, package, and update
   state.
@@ -71,14 +71,14 @@ SHA-256 manifest, and stages it under `vendor/opencode-<version>/`.
 
 `build-package.sh`:
 
-1. Extract the base package (build-only Node, Settings bundle, plists).
+1. Extract the base package (build-only Node, Settings resources, plists).
 2. Replace `opencode.mjs` and `assets/` with the vendor bundle.
 3. Remove macOS native addons/helpers; add `assets/ios/pty-stub.cjs`.
 4. Generate `port.json`.
 5. Apply `port/ios/bundle.mjs` (runtime adaptation).
 6. Apply `port/ios/endpoints.mjs` (`/_ios/battery.json`, `/_ios/port.json`).
 7. Copy `server.sh`, `watchdog.sh`, `network-gate.cjs`, and the plists.
-8. Compile `opencode-battery`; patch and re-sign the Settings bundle.
+8. Compile `opencode-battery` and the universal Settings bundle, then sign them.
 9. Apply `patch-assets.mjs` (session-sync retry, cache-busting rename).
 10. Apply `patch-ui.mjs` (title widget, service-worker re-hash).
 11. Apply `patch-server.mjs` (restart continuity, same-device OAuth text).
@@ -181,10 +181,10 @@ message into sessions that were interrupted.
 
 ## Settings bundle
 
-The Settings pane is a compiled binary that used to invoke
-`sudo -n /var/jb/usr/bin/opencode-server …`. `patch-prefs.py` rewrites the two
-C strings in `__cstring` to call the helper directly, then `ldid -S` re-signs
-the bundle. This is our own bundle, not upstream code.
+The Settings controller is built from `preferences/OpenCodeServerPrefs.m` for
+both arm64 and arm64e. The build combines the slices and signs the bundle.
+Server actions call the rootless helper as the mobile user, while network
+switches update the gate's settings after a confirmation.
 
 ## Security model
 
@@ -215,7 +215,7 @@ sudo /var/jb/usr/bin/dpkg -i build/opencode-server-<version>_iphoneos-arm64.deb
 | `patch-assets.mjs` | Medium-high — minified session-sync pattern. |
 | `port/ios/endpoints.mjs` | Medium — asset-loader Proxy shape. |
 | `patch-ui.mjs` | Medium — archive format and service-worker manifest. |
-| `patch-prefs.py` | Medium — our Settings bundle strings. |
+| `preferences/OpenCodeServerPrefs.m` | Medium — the Settings controller. |
 | `network-gate.cjs` | Low — depends on Node `http.createServer`. |
 | `VERSION` / `port.json` | Low. |
 
@@ -238,7 +238,7 @@ port/ios/pty-stub.cjs       node-pty stand-in
 patch-assets.mjs            session sync + chunk rename
 patch-ui.mjs                title widget + service-worker hashes
 patch-server.mjs            restart continuity + OAuth text
-patch-prefs.py              Settings bundle string patch
+preferences/                Settings controller and universal binary builder
 battery.c                   IOPowerSources helper
 ui/ios-battery.js           title widget source
 scripts/                    check-update / update-upstream / fetch-bundle

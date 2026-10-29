@@ -26,12 +26,13 @@ fi
 VENDOR="$ROOT/vendor/opencode-$UPSTREAM_VERSION"
 
 for source in control postinst-hook.sh postinst-flags.sh prerm-hook.sh \
-  opencode-server server.sh watchdog.sh patch-prefs.py patch-postinst.py \
+  opencode-server server.sh watchdog.sh patch-postinst.py \
   patch-assets.mjs patch-server.mjs patch-ui.mjs \
   battery.c ui/ios-battery.js network-gate.cjs port/ios/bundle.mjs \
   port/ios/endpoints.mjs port/ios/pty-stub.cjs \
   com.alsinas.opencode-server.plist \
-  com.alsinas.opencode-watchdog.plist; do
+  com.alsinas.opencode-watchdog.plist preferences/OpenCodeServerPrefs.m \
+  preferences/make-fat.py; do
   if [ ! -r "$ROOT/$source" ]; then
     echo "Missing source file: $ROOT/$source" >&2
     exit 1
@@ -128,10 +129,17 @@ fi
 "$BIN/ldid" -S "$STAGE/var/jb/usr/lib/opencode-ios/opencode-battery"
 chmod 755 "$STAGE/var/jb/usr/lib/opencode-ios/opencode-battery"
 
-# The Settings bundle is only available as a compiled binary. Remove its two
-# sudo invocations and re-sign the patched Mach-O.
+# Build the settings controller for both older arm64 devices and arm64e
+# Settings processes on modern rootless jailbreaks.
 PREFS="$STAGE/var/jb/Library/PreferenceBundles/OpenCodeServerPrefs.bundle/OpenCodeServerPrefs"
-"$BIN/python3" "$ROOT/patch-prefs.py" "$PREFS"
+for arch in arm64 arm64e; do
+  "$CLANG" -arch "$arch" -isysroot "$SDK" -miphoneos-version-min=15.0 \
+    -fobjc-arc -dynamiclib -undefined dynamic_lookup \
+    -framework Foundation -framework UIKit \
+    -o "$BUILD/OpenCodeServerPrefs-$arch" "$ROOT/preferences/OpenCodeServerPrefs.m"
+done
+"$BIN/python3" "$ROOT/preferences/make-fat.py" \
+  "$BUILD/OpenCodeServerPrefs-arm64" "$BUILD/OpenCodeServerPrefs-arm64e" "$PREFS"
 "$BIN/ldid" -S "$PREFS"
 
 # Retry the optimistic session sync in the bundled web UI so the first chat is
