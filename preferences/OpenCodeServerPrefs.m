@@ -6,6 +6,7 @@
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <string.h>
 #include <unistd.h>
 
 @class PSSpecifier;
@@ -132,7 +133,13 @@ static NSString *const ConfigPath = @"/var/mobile/.config/opencode-ios/settings.
             if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET) continue;
             struct sockaddr_in *v4 = (struct sockaddr_in *)entry->ifa_addr;
             uint32_t ip = ntohl(v4->sin_addr.s_addr);
-            BOOL match = tailscale ? ((ip & 0xffc00000U) == 0x64400000U) : (strcmp(entry->ifa_name, "en0") == 0);
+            // Carrier IPv4 can also be in 100.64.0.0/10 (for example
+            // pdp_ip0). Tailscale on iOS assigns its address to utunN, so
+            // require both the tunnel interface and the Tailscale range.
+            BOOL isTailscaleTunnel = entry->ifa_name && strncmp(entry->ifa_name, "utun", 4) == 0;
+            BOOL match = tailscale
+                ? (isTailscaleTunnel && (ip & 0xffc00000U) == 0x64400000U)
+                : (strcmp(entry->ifa_name, "en0") == 0);
             if (match) { char buf[INET_ADDRSTRLEN]; if (inet_ntop(AF_INET, &v4->sin_addr, buf, sizeof(buf))) address = [NSString stringWithUTF8String:buf]; break; }
         }
         freeifaddrs(addresses);
