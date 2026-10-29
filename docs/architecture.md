@@ -171,7 +171,11 @@ The server job uses launchd `KeepAlive` with a `PathState` flag
   delays;
 - honors `AUTO_START=0` and removes the PathState flag at boot.
 
-The V8 old-space limit defaults to 768 MB. `server.sh` clears suspended-session
+The V8 old-space limit defaults to 768 MB. The server keeps WebAssembly's
+baseline compiler but disables WebAssembly tier-up and code-space collection;
+on-device testing with a 521 MB session database reproduced a V8 SIGBUS during
+code reclamation, while these flags allowed the server to load and serve the
+same database. `server.sh` clears suspended-session
 claims older than two hours before start, so a restart does not resurrect
 abandoned work.
 

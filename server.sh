@@ -99,7 +99,14 @@ fi
 
 echo "[server.sh] starting node pid=$$ heap=${HEAP_MB}MB host=$HOST port=$PORT $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG" 2>/dev/null || true
 
+# Keep WebAssembly's baseline compiler, but avoid optimizer/code-GC churn.
+# On-device, servers with larger existing session stores SIGBUS during V8's
+# WebAssembly code-space reclamation; these flags let the same DB boot and
+# serve sessions while preserving WebAssembly support.
 exec "$NODE" \
   --max-old-space-size="$HEAP_MB" \
+  --no-wasm-tier-up \
+  --no-wasm-dynamic-tiering \
+  --no-wasm-code-gc \
   --require "$GATE" \
   "$ENTRY" serve --hostname "$HOST" --port "$PORT"
