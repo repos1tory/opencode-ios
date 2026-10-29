@@ -39,12 +39,12 @@ contains the official web UI and server bundle.
 
 ### Direct .deb
 
-[Download Node.js 22.19.0-3](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios2/nodejs_22.19.0-3_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios6](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios6/opencode-server-2.2.0-ios6_iphoneos-arm64.deb).
+[Download Node.js 22.19.0-3](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios2/nodejs_22.19.0-3_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios7](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios7/opencode-server-2.2.0-ios7_iphoneos-arm64.deb).
 Install Node.js first when using `dpkg` directly; Sileo and Zebra resolve it automatically.
 
 ```sh
 sudo /var/jb/usr/bin/dpkg -i nodejs_22.19.0-3_iphoneos-arm64.deb
-sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios6_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios7_iphoneos-arm64.deb
 ```
 
 The package starts automatically by default. Set `AUTO_START=0` in
@@ -109,7 +109,7 @@ The Settings pane exposes the same controls: **Start**, **Stop**, **Restart**,
 The package version is `<upstream>-ios<port>`:
 
 ```
-OpenCode 2.2.0  →  package 2.2.0-ios6
+OpenCode 2.2.0  →  package 2.2.0-ios7
 ```
 
 - `/api/info` reports the **upstream** version.
