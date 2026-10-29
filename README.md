@@ -39,10 +39,11 @@ contains the official web UI and server bundle.
 
 ### Direct .deb
 
-[Download 2.2.0-ios4](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios4/opencode-server-2.2.0-ios4_iphoneos-arm64.deb)
-or install manually:
+[Download Node.js 22.19.0-2](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios1/nodejs_22.19.0-2_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios4](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios4/opencode-server-2.2.0-ios4_iphoneos-arm64.deb).
+Install Node.js first when using `dpkg` directly; Sileo and Zebra resolve it automatically.
 
 ```sh
+sudo /var/jb/usr/bin/dpkg -i nodejs_22.19.0-2_iphoneos-arm64.deb
 sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios4_iphoneos-arm64.deb
 ```
 
