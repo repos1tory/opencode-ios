@@ -232,7 +232,7 @@ case "${1:-status}" in
     ;;
   stop)
     acquire_lock
-    stop_service "$label" "$core_flag" || true
+    stop_service "$label" "$core_flag"
     ;;
   restart)
     acquire_lock
@@ -281,6 +281,26 @@ case "${1:-status}" in
     "$launchctl" print "$label" 2>/dev/null || true
     wait_for_core
     report_access
+    ;;
+  probe)
+    # This is intentionally a fast, non-waiting check for the Settings pane.
+    # `status` and `check` are diagnostic commands that can wait up to 90s.
+    if [ ! -x "$launchctl" ]; then
+      echo UNAVAILABLE
+    elif job_loaded "$label"; then
+      pid="$(job_pid "$label" || true)"
+      if [ -n "$pid" ]; then
+        if healthy "$(core_url)"; then echo RUNNING; else echo NOT_RESPONDING; fi
+      elif [ -e "$core_flag" ]; then
+        echo STARTING
+      else
+        echo STOPPED
+      fi
+    elif [ -e "$core_flag" ]; then
+      echo UNAVAILABLE
+    else
+      echo STOPPED
+    fi
     ;;
   check)
     wait_for_core
@@ -349,7 +369,7 @@ case "${1:-status}" in
       /var/mobile/Library/Logs/OpenCode/network.log
     ;;
   *)
-    echo "Usage: opencode-server {start|stop|restart|exposure|enable|disable|status|check|access|version|check-update|url|logs}" >&2
+    echo "Usage: opencode-server {start|stop|restart|exposure|enable|disable|status|probe|check|access|version|check-update|url|logs}" >&2
     exit 2
     ;;
 esac
