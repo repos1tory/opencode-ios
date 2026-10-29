@@ -23,7 +23,7 @@ from the device itself, your LAN, or Tailscale.
 | Firmware | iOS 15 or newer |
 | Architecture | `iphoneos-arm64` (rootless) |
 | Package manager | Sileo or Zebra |
-| Dependencies | `nodejs (>= 22.19.0-2)`, `preferenceloader`, `curl`, `lsof` |
+| Dependencies | `nodejs (>= 22.19.0-3)`, `preferenceloader`, `curl`, `lsof` |
 
 Sileo installs the compatible Node.js runtime automatically as a required
 dependency. OpenCode uses the shared rootless Node wrapper, and the package
@@ -39,12 +39,12 @@ contains the official web UI and server bundle.
 
 ### Direct .deb
 
-[Download Node.js 22.19.0-2](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios1/nodejs_22.19.0-2_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios4](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios4/opencode-server-2.2.0-ios4_iphoneos-arm64.deb).
+[Download Node.js 22.19.0-3](https://github.com/repos1tory/node-ios/releases/download/v22.19.0-ios2/nodejs_22.19.0-3_iphoneos-arm64.deb) and [OpenCode 2.2.0-ios5](https://github.com/repos1tory/opencode-ios/releases/download/opencode-ios-2.2.0-ios5/opencode-server-2.2.0-ios5_iphoneos-arm64.deb).
 Install Node.js first when using `dpkg` directly; Sileo and Zebra resolve it automatically.
 
 ```sh
-sudo /var/jb/usr/bin/dpkg -i nodejs_22.19.0-2_iphoneos-arm64.deb
-sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios4_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i nodejs_22.19.0-3_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i opencode-server-2.2.0-ios5_iphoneos-arm64.deb
 ```
 
 The package starts automatically by default. Set `AUTO_START=0` in
@@ -109,7 +109,7 @@ The Settings pane exposes the same controls: **Start**, **Stop**, **Restart**,
 The package version is `<upstream>-ios<port>`:
 
 ```
-OpenCode 2.2.0  →  package 2.2.0-ios4
+OpenCode 2.2.0  →  package 2.2.0-ios5
 ```
 
 - `/api/info` reports the **upstream** version.

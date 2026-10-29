@@ -16,16 +16,21 @@ done
 watchdog_domain=system
 watchdog_label="$watchdog_domain/com.alsinas.opencode-watchdog"
 watchdog_plist=/var/jb/Library/LaunchDaemons/com.alsinas.opencode-watchdog.plist
+watchdog_install_log=/var/mobile/Library/Logs/OpenCode/watchdog-install.log
+/var/jb/usr/bin/mkdir -p /var/mobile/Library/Logs/OpenCode
+: >"$watchdog_install_log" 2>/dev/null || true
 "$launchctl" enable "$watchdog_label" 2>/dev/null || true
 "$launchctl" bootout "$watchdog_label" 2>/dev/null || true
 attempt=0
 while [ "$attempt" -lt 10 ]; do
-  if "$launchctl" bootstrap "$watchdog_domain" "$watchdog_plist" 2>/dev/null; then break; fi
+  if "$launchctl" bootstrap "$watchdog_domain" "$watchdog_plist" >>"$watchdog_install_log" 2>&1; then break; fi
   if "$launchctl" print "$watchdog_label" >/dev/null 2>&1; then break; fi
   /var/jb/usr/bin/sleep 1
   attempt=$((attempt + 1))
 done
 if [ "$attempt" -ge 10 ]; then
-  echo "Could not load the OpenCode uptime watchdog." >&2
-  exit 1
+  # The watchdog is supplementary; the server has its own launchd KeepAlive
+  # job. A launchd-domain difference on a supported jailbreak must not leave
+  # dpkg half-configured or suppress the UIKit preference registration trigger.
+  echo "Warning: OpenCode installed, but its uptime watchdog could not be loaded; see $watchdog_install_log." >&2
 fi
